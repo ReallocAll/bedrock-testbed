@@ -2,14 +2,14 @@ name: Real BDS EndPilot Smoke
 
 on:
   push:
-    branches: [feat/endpilot-real-bds, test/endpilot-revision-validation, main]
+    branches: [feat/endpilot-real-bds, test/endpilot-revision-validation, test/event-subscriptions, main]
   workflow_dispatch:
     inputs:
       endpilot_commit:
         description: 'Exact EndPilot commit SHA (40 lowercase hex characters)'
         required: false
         type: string
-        default: '9ed2dc59ea069b621b019919b7333613e6cdb711'
+        default: '8f920627fbf8e2d34bfc2d16d56f8163c36db3ca'
 
 permissions:
   contents: read
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '9ed2dc59ea069b621b019919b7333613e6cdb711' }}
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '8f920627fbf8e2d34bfc2d16d56f8163c36db3ca' }}
     steps:
       - uses: actions/checkout@v4
         with:

@@ -2,7 +2,7 @@
 
 Minimal real-server smoke tests on Ubuntu 24.04 x86-64. Server: **Endstone
 0.11.14 / BDS 1.26.52 / protocol 2193** on Python 3.13. Client: EndPilot
-`9ed2dc59ea069b621b019919b7333613e6cdb711` (default, overridable) on Python 3.12.
+`8f920627fbf8e2d34bfc2d16d56f8163c36db3ca` (default, overridable) on Python 3.12.
 
 The client's `bedrock-protocol-native==0.5.0.dev0` is not on PyPI. Use the
 CI-verified `python-pure` and `python-native-Linux` CPython 3.12 wheels from
@@ -18,9 +18,9 @@ python3.13 -m venv .venv-server
 python3.12 -m venv .venv-client
 # Extract the pinned artifacts to dependencies/pure and dependencies/native first.
 .venv-client/bin/python -m pip install dependencies/pure/*.whl dependencies/native/*.whl \
-  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@9ed2dc59ea069b621b019919b7333613e6cdb711'
+  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@8f920627fbf8e2d34bfc2d16d56f8163c36db3ca'
 .venv-client/bin/python testbed.py --server-python .venv-server/bin/python \
-  --endpilot-commit 9ed2dc59ea069b621b019919b7333613e6cdb711
+  --endpilot-commit 8f920627fbf8e2d34bfc2d16d56f8163c36db3ca
 ```
 
 Use Actions **Run workflow** with the optional `endpilot_commit` input to test an exact
@@ -38,7 +38,10 @@ do not store personal data there.
 It requires both EndPilot Ready and server-side `list`, received world data,
 new server ChunkRadiusUpdated responses after public `send_packet()`, continued
 correctness following rejected invalid packets, and clean disconnect and BDS
-process shutdown. Passing queue admission alone cannot pass the test.
+process shutdown. The event subscription scenario additionally confirms two independent
+PacketDecodedEvent observers, observer-exception reporting without shutting down
+the healthy session, and idempotent unsubscription. Passing queue admission
+alone cannot pass the test.
 
 GitHub Actions saves `work/result.json` and `work/bds.log`, even on failure.
 No production servers/worlds, generic adapters, custom packet codecs or test
