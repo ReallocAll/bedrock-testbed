@@ -44,9 +44,10 @@ the healthy session, and idempotent unsubscription. Passing queue admission
 alone cannot pass the test.
 
 GitHub Actions saves `work/result.json` and `work/bds.log`, even on failure.
-The input extension scenario additionally teleports into a freshly created
-platform and verifies the resulting movement with a BDS-side entity selector.
-This is a server-authoritative oracle, not a count of submitted input frames.
+The input extension scenario teleports into the fresh test world, submits
+34 frames through a standalone event subscriber, and compares BDS `querytarget`
+coordinates before and after movement. This is a server-authoritative oracle,
+not a count of submitted input frames or the client's predicted position.
 
 No production servers/worlds, generic adapters, custom packet codecs or test
 controllers are involved. The server world and process are never cached.

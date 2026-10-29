@@ -291,51 +291,43 @@ async def exercise(server, results):
         results["radius_after_rejection"] = second
         results["checks"].append("invalid_packet_isolation")
 
-        # Prove player movement using a BDS-side entity-selector oracle, rather
-        # than treating locally predicted bot.position or sent packets as success.
+        # A separate, server-authoritative oracle: BDS querytarget reports the
+        # entity's actual coordinates, unlike the client's predicted position.
         server.command(f"tp {PLAYER} 0.5 101 0.5")
         deadline = loop.time() + 12
         while loop.time() < deadline and bot.get_status().position.y > 128:
             await asyncio.sleep(0.1)
-        teleported = bot.get_status().position
-        results["teleported_client_position"] = [teleported.x, teleported.y, teleported.z]
-        if teleported.y > 128:
-            raise AssertionError("Client never observed BDS teleport to the test platform")
+        if bot.get_status().position.y > 128:
+            raise AssertionError("Client never observed BDS teleport")
 
-        async def position_oracle(x, marker, timeout=6, radius=1.3):
-            deadline = loop.time() + timeout
-            latest = []
+        async def authoritative_position():
+            offset = server.command(f"querytarget {PLAYER}")
+            deadline = loop.time() + 5
             while loop.time() < deadline:
-                offset = server.command(
-                    f"execute positioned {x} 101 0.5 if entity @a[name={PLAYER},r={radius}] run say {marker}"
-                )
-                await asyncio.sleep(0.2)
-                latest = server.snapshot(offset)
-                if any(marker in line for line in latest):
-                    return latest
-                if any("syntax error" in line.lower() for line in latest):
-                    raise AssertionError(f"Server entity-selector oracle failed: {latest}")
-            raise AssertionError(f"Server did not confirm player at x={x}; response: {latest}")
+                lines = server.snapshot(offset)
+                fields = [line.partition("]:")[2].strip() for line in lines]
+                start = next((i for i, value in enumerate(fields) if value.startswith("Target data:")), None)
+                if start is not None:
+                    stop = next((i for i in range(start + 1, len(fields)) if fields[i] == "]"), None)
+                    if stop is not None:
+                        document = fields[start].split("Target data:", 1)[1] + " ".join(
+                            fields[start + 1:stop + 1]
+                        )
+                        targets = json.loads(document)
+                        if len(targets) != 1 or targets[0]["dimension"] != 0:
+                            raise AssertionError(f"Unexpected BDS target response: {targets}")
+                        return targets[0]["position"]
+                if any("unknown command" in line.lower() or "syntax error" in line.lower() for line in lines):
+                    raise AssertionError(f"BDS querytarget unavailable: {lines}")
+                await asyncio.sleep(0.1)
+            raise TimeoutError(f"No complete BDS querytarget response: {server.snapshot(offset)}")
 
-        results["origin_server_oracle"] = await position_oracle(0.5, "ENDPILOT_ORIGIN")
+        origin = await authoritative_position()
+        results["start_server_position"] = origin
+        assert abs(origin["x"] - 0.5) < 1, f"BDS did not teleport to the initial x: {origin}"
         results["checks"].append("server_position_origin_confirmed")
 
-        # The destination chunk is not loaded before teleport; building the
-        # floor first makes BDS reject fill as outside the world.
-        fill_offset = server.command("fill 0 100 0 7 100 7 stone")
-        fill_deadline = loop.time() + 5
-        while loop.time() < fill_deadline:
-            fill_lines = server.snapshot(fill_offset)
-            if any("ERROR" in line or "syntax error" in line.lower()
-                   for line in fill_lines):
-                raise AssertionError(f"BDS did not create the movement platform: {fill_lines}")
-            if any("filled" in line.lower() and "ERROR" not in line for line in fill_lines):
-                results["platform_server_output"] = fill_lines
-                break
-            await asyncio.sleep(0.1)
-        else:
-            raise AssertionError(f"No BDS floor fill confirmation: {server.snapshot(fill_offset)}")
-
+        # Independent third-party behavior using only public event and input APIs.
         submitted = 0
 
         def walk(_bot, event):
@@ -358,28 +350,12 @@ async def exercise(server, results):
             await asyncio.sleep(0.1)
         stop_walking()
         results["input_frames"] = submitted
-        results["predicted_client_position"] = [
-            bot.get_status().position.x, bot.get_status().position.y, bot.get_status().position.z
-        ]
         assert submitted == 34 and bot.get_status().state == BotState.ready
-        # Bedrock's authoritative corrections can limit travel. Require the
-        # player's *server-side* feet to enter x>=1, excluding spawn x=0.5,
-        # without assuming a particular speed or precise eye height.
-        destination_offset = server.command(
-            f"execute if entity @a[name={PLAYER},x=1,y=100,z=0,dx=6,dy=4,dz=1] "
-            "run say ENDPILOT_MOVED"
-        )
-        await asyncio.sleep(0.3)
-        results["destination_server_oracle"] = server.snapshot(destination_offset)
-        if not any("ENDPILOT_MOVED" in line for line in results["destination_server_oracle"]):
-            detail = server.command(f"querytarget {PLAYER}")
-            await asyncio.sleep(0.3)
-            results["querytarget_diagnostics"] = server.snapshot(detail)
-            raise AssertionError(
-                "BDS did not confirm at least 0.5 blocks horizontal movement: "
-                f"{results['destination_server_oracle']}, querytarget: {results['querytarget_diagnostics']}"
-            )
-        results["minimum_server_displacement"] = 0.5
+        destination = await authoritative_position()
+        results["end_server_position"] = destination
+        displacement = math.hypot(destination["x"] - origin["x"], destination["z"] - origin["z"])
+        results["server_horizontal_displacement"] = displacement
+        assert displacement >= 0.5, f"BDS did not accept significant horizontal movement: {origin} -> {destination}"
         results["checks"].append("input_movement_server_confirmed")
 
         await bot.disconnect()
