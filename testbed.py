@@ -293,7 +293,6 @@ async def exercise(server, results):
 
         # Prove player movement using a BDS-side entity-selector oracle, rather
         # than treating locally predicted bot.position or sent packets as success.
-        server.command("fill -8 63 -8 8 63 8 stone")
         server.command(f"tp {PLAYER} 0.5 65 0.5")
         deadline = loop.time() + 12
         while loop.time() < deadline and bot.get_status().position.y > 128:
@@ -320,6 +319,22 @@ async def exercise(server, results):
 
         results["origin_server_oracle"] = await position_oracle(0.5, "ENDPILOT_ORIGIN")
         results["checks"].append("server_position_origin_confirmed")
+
+        # The destination chunk is not loaded before teleport; building the
+        # floor first makes BDS reject fill as outside the world.
+        fill_offset = server.command("fill 0 64 0 7 64 7 stone")
+        fill_deadline = loop.time() + 5
+        while loop.time() < fill_deadline:
+            fill_lines = server.snapshot(fill_offset)
+            if any("outside of the world" in line.lower() or "syntax error" in line.lower()
+                   for line in fill_lines):
+                raise AssertionError(f"BDS did not create the movement platform: {fill_lines}")
+            if any("filled" in line.lower() for line in fill_lines):
+                results["platform_server_output"] = fill_lines
+                break
+            await asyncio.sleep(0.1)
+        else:
+            raise AssertionError(f"No BDS floor fill confirmation: {server.snapshot(fill_offset)}")
 
         submitted = 0
 
