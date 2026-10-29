@@ -24,16 +24,38 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-      - name: Install isolated Endstone and EndPilot environments
+      - name: Install isolated Endstone server
+        run: |
+          python -m venv .venv-server
+          .venv-server/bin/python -m pip install 'endstone==0.11.14'
+      - name: Get pinned protocol compiler wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: python-pure
+          repository: ReallocAll/bedrock-protocol
+          run-id: 40091787005
+          github-token: ${{ secrets.REPO_DEVELOP }}
+          path: dependencies/pure
+      - name: Get pinned Linux native protocol wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: python-native-Linux
+          repository: ReallocAll/bedrock-protocol
+          run-id: 40091787005
+          github-token: ${{ secrets.REPO_DEVELOP }}
+          path: dependencies/native
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install isolated EndPilot client
         shell: bash
         run: |
           set -euo pipefail
-          python -m venv .venv-server
-          .venv-server/bin/python -m pip install 'endstone==0.11.14'
           python -m venv .venv-client
-          .venv-client/bin/python -m pip install 'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@b5a74d12497ddcc44eddf61ee6813138889ff40f'
-          .venv-server/bin/python -m pip show endstone
-          .venv-client/bin/python -m pip show endpilot
+          .venv-client/bin/python -m pip install dependencies/pure/*.whl dependencies/native/*.whl \
+            'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@b5a74d12497ddcc44eddf61ee6813138889ff40f'
+          .venv-client/bin/python -m pip check
+          .venv-client/bin/python -m pip show endpilot bedrock-protocol-native
       - name: Exercise public Typed Packet API against fresh real BDS
         run: .venv-client/bin/python testbed.py --server-python .venv-server/bin/python
       - name: Save evidence even on failure
