@@ -2,7 +2,7 @@
 
 Minimal real-server smoke tests on Ubuntu 24.04 x86-64. Server: **Endstone
 0.11.14 / BDS 1.26.52 / protocol 2193** on Python 3.13. Client: EndPilot
-`4eab995a1363a21ad751132f3fd064cb1b64f181` (default, overridable) on Python 3.12.
+`8f920627fbf8e2d34bfc2d16d56f8163c36db3ca` (default, overridable) on Python 3.12.
 
 The client's `bedrock-protocol-native==0.5.0.dev0` is not on PyPI. Use the
 CI-verified `python-pure` and `python-native-Linux` CPython 3.12 wheels from
@@ -18,9 +18,9 @@ python3.13 -m venv .venv-server
 python3.12 -m venv .venv-client
 # Extract the pinned artifacts to dependencies/pure and dependencies/native first.
 .venv-client/bin/python -m pip install dependencies/pure/*.whl dependencies/native/*.whl \
-  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@4eab995a1363a21ad751132f3fd064cb1b64f181'
+  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@8f920627fbf8e2d34bfc2d16d56f8163c36db3ca'
 .venv-client/bin/python testbed.py --server-python .venv-server/bin/python \
-  --endpilot-commit 4eab995a1363a21ad751132f3fd064cb1b64f181
+  --endpilot-commit 8f920627fbf8e2d34bfc2d16d56f8163c36db3ca
 ```
 
 Use Actions **Run workflow** with the optional `endpilot_commit` input to test an exact
