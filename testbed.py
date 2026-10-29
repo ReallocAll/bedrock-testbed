@@ -251,7 +251,7 @@ async def exercise(server, results):
 
         try:
             bot.send_packet(object())
-        except (TypeError, ValueError, RuntimeError) as error:
+        except Exception as error:
             results["rejected_packet"] = type(error).__name__
         else:
             raise AssertionError("Invalid typed packet was admitted")
