@@ -362,12 +362,23 @@ async def exercise(server, results):
             bot.get_status().position.x, bot.get_status().position.y, bot.get_status().position.z
         ]
         assert submitted == 34 and bot.get_status().state == BotState.ready
-        # Server corrections can limit a 34-frame motion to less than the
-        # predicted ~3 blocks. The target radius never includes the spawn
-        # coordinate (x=0.5), so success still proves real movement.
-        results["destination_server_oracle"] = await position_oracle(
-            1.6, "ENDPILOT_MOVED", timeout=8, radius=0.6
+        # Bedrock's authoritative corrections can limit travel. Require the
+        # player's *server-side* feet to enter x>=1, excluding spawn x=0.5,
+        # without assuming a particular speed or precise eye height.
+        destination_offset = server.command(
+            f"execute if entity @a[name={PLAYER},x=1,y=64,z=0,dx=6,dy=4,dz=1] "
+            "run say ENDPILOT_MOVED"
         )
+        await asyncio.sleep(0.3)
+        results["destination_server_oracle"] = server.snapshot(destination_offset)
+        if not any("ENDPILOT_MOVED" in line for line in results["destination_server_oracle"]):
+            detail = server.command(f"querytarget {PLAYER}")
+            await asyncio.sleep(0.3)
+            results["querytarget_diagnostics"] = server.snapshot(detail)
+            raise AssertionError(
+                "BDS did not confirm at least 0.5 blocks horizontal movement: "
+                f"{results['destination_server_oracle']}, querytarget: {results['querytarget_diagnostics']}"
+            )
         results["minimum_server_displacement"] = 0.5
         results["checks"].append("input_movement_server_confirmed")
 
