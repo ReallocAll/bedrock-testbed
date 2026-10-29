@@ -1,0 +1,5 @@
+.venv-server/
+.venv-client/
+work/
+__pycache__/
+*.pyc
