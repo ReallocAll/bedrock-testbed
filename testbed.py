@@ -208,6 +208,16 @@ async def exercise(server, results):
     from endpilot import BotOptions, BotState, EventKind, PacketDecodedEvent, Runtime, event_mask
 
     radius_events = []
+    observer_radii = []
+    observer_errors = []
+
+    def observe_radius(_bot, event):
+        if isinstance(event, PacketDecodedEvent) and event.packet.header.packet_id == 70:
+            observer_radii.append(int(event.packet.payload.chunk_radius))
+
+    def broken_observer(_bot, event):
+        if isinstance(event, PacketDecodedEvent) and event.packet.header.packet_id == 70:
+            raise ValueError("independent observer sentinel")
 
     def callback(_bot, event):
         if isinstance(event, PacketDecodedEvent) and event.packet.header.packet_id == 70:
@@ -219,6 +229,11 @@ async def exercise(server, results):
             protocol=2193, name=PLAYER, chunk_radius=16,
         ))
         await bot.wait_ready(65)
+        loop = asyncio.get_running_loop()
+        previous_handler = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: observer_errors.append(context))
+        unsubscribe_good = runtime.subscribe(observe_radius, events=event_mask(EventKind.packet_decoded))
+        unsubscribe_bad = runtime.subscribe(broken_observer, events=event_mask(EventKind.packet_decoded))
         status = bot.get_status()
         assert status.state == BotState.ready
         assert status.actor_runtime_id > 0
@@ -245,6 +260,14 @@ async def exercise(server, results):
 
         initial = bot.get_status().chunk_radius
         first = await request_and_observe(6)
+        assert observer_radii[-1:] == [first["approved"]], "Independent subscriber missed server response"
+        assert observer_errors and all(
+            entry.get("message") == "EndPilot event observer failed"
+            and isinstance(entry.get("exception"), ValueError) for entry in observer_errors
+        ), f"Unexpected observer error reports: {observer_errors}"
+        failures_before = len(observer_errors)
+        unsubscribe_bad()
+        unsubscribe_bad()
         assert first["approved"] != initial, f"radius did not change from initial {initial}"
         results["initial_radius"] = initial
         results["radius_request"] = first
@@ -259,6 +282,12 @@ async def exercise(server, results):
         assert bot.get_status().state == BotState.ready, "Invalid public packet poisoned the session"
         second = await request_and_observe(8)
         assert second["approved"] != first["approved"], "Session did not process valid packet after rejection"
+        assert observer_radii[-1:] == [second["approved"]], "Observer stopped receiving after another observer failed"
+        assert len(observer_errors) == failures_before, "Unsubscribed observer still failed"
+        unsubscribe_good()
+        loop.set_exception_handler(previous_handler)
+        results["observer_failures_isolated"] = failures_before
+        results["checks"].append("independent_observers_fault_isolated")
         results["radius_after_rejection"] = second
         results["checks"].append("invalid_packet_isolation")
 
