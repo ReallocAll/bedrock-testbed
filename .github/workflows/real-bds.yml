@@ -1,0 +1,50 @@
+name: Real BDS EndPilot Smoke
+
+on:
+  push:
+    branches: [feat/endpilot-real-bds, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-bds-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  endpilot:
+    if: github.actor == 'ReallocAll'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install isolated Endstone and EndPilot environments
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv-server
+          .venv-server/bin/python -m pip install 'endstone==0.11.14'
+          python -m venv .venv-client
+          .venv-client/bin/python -m pip install 'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@b5a74d12497ddcc44eddf61ee6813138889ff40f'
+          .venv-server/bin/python -m pip show endstone
+          .venv-client/bin/python -m pip show endpilot
+      - name: Exercise public Typed Packet API against fresh real BDS
+        run: .venv-client/bin/python testbed.py --server-python .venv-server/bin/python
+      - name: Save evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-bds-endpilot
+          path: |
+            work/result.json
+            work/bds.log
+            work/server/version.txt
+            work/server/server.properties
+          if-no-files-found: warn
+          retention-days: 14
