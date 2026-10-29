@@ -2,13 +2,19 @@
 
 Minimal real-server smoke tests on Ubuntu 24.04 x86-64. Server: **Endstone
 0.11.14 / BDS 1.26.52 / protocol 2193** on Python 3.13. Client: EndPilot
-`eeada2cb43b0b5892501267d2b7f3687bfaed459` (default, overridable) on Python 3.12.
+`9ba1977bd5b589b1b38827f7149348190eadfe44` (default, overridable) on Python 3.12.
 
 The client's `bedrock-protocol-native==0.5.0.dev0` is not on PyPI. Use the
 CI-verified `python-pure` and `python-native-Linux` CPython 3.12 wheels from
 [bedrock-protocol run 40091787005](https://github.com/ReallocAll/bedrock-protocol/actions/runs/40091787005).
 The workflow downloads these pinned artifacts using read-only cross-repo access.
 The token is passed only to the official GitHub download action.
+These exact upstream Actions artifacts expire **2027-01-22 11:54 UTC**.
+The upstream `release.yml` already packages the producer's wheels into a draft
+tagged Release, but no published release assets are currently available; move
+to a published producer Release or PyPI before the Artifact expires rather
+than copying its native build infrastructure into this testbed.
+
 
 ## Run locally (Linux)
 
@@ -18,9 +24,9 @@ python3.13 -m venv .venv-server
 python3.12 -m venv .venv-client
 # Extract the pinned artifacts to dependencies/pure and dependencies/native first.
 .venv-client/bin/python -m pip install dependencies/pure/*.whl dependencies/native/*.whl \
-  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@eeada2cb43b0b5892501267d2b7f3687bfaed459'
+  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@9ba1977bd5b589b1b38827f7149348190eadfe44'
 .venv-client/bin/python testbed.py --server-python .venv-server/bin/python \
-  --endpilot-commit eeada2cb43b0b5892501267d2b7f3687bfaed459
+  --endpilot-commit 9ba1977bd5b589b1b38827f7149348190eadfe44
 ```
 
 Use Actions **Run workflow** with the optional `endpilot_commit` input to test an exact
