@@ -276,7 +276,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--server-python", type=Path, required=True)
     args = parser.parse_args()
-    python = args.server_python.resolve()
+    # Preserve the venv executable path; resolve() follows its symlink to base Python.
+    python = args.server_python.absolute()
     work = ROOT / "work"
     if work.exists():
         shutil.rmtree(work)
