@@ -23,6 +23,8 @@ ROOT = Path(__file__).resolve().parent
 PLAYER = "EndPilotTest"
 VERSION_LINE = "This server is running Endstone version: 0.11.14 (Minecraft: 26.52)"
 PROPERTIES = {
+    "transport": "raknet",
+    "enable-lan-visibility": "false",
     "online-mode": "false",
     "allow-list": "false",
     "server-port": "19132",
