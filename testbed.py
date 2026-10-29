@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from importlib.metadata import distribution
 import math
 import os
 import re
@@ -277,6 +278,7 @@ async def exercise(server, results):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--server-python", type=Path, required=True)
+    parser.add_argument("--endpilot-commit", required=True, help="Full SHA expected from the EndPilot VCS install")
     args = parser.parse_args()
     # Preserve the venv executable path; resolve() follows its symlink to base Python.
     python = args.server_python.absolute()
@@ -292,12 +294,26 @@ def main():
         "bds": "1.26.52",
         "protocol": 2193,
         "python": sys.version.split()[0],
-        "endpilot_commit": "b5a74d12497ddcc44eddf61ee6813138889ff40f",
+        "endpilot_commit": args.endpilot_commit,
+        "installed_endpilot_commit": None,
         "checks": [],
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     server = None
     try:
+        direct_url = distribution("endpilot").read_text("direct_url.json")
+        if direct_url is None:
+            raise RuntimeError("EndPilot has no PEP 610 VCS installation metadata")
+        vcs = json.loads(direct_url).get("vcs_info", {})
+        installed_commit = vcs.get("commit_id")
+        results["installed_endpilot_commit"] = installed_commit
+        if not re.fullmatch(r"[0-9a-f]{40}", args.endpilot_commit):
+            raise ValueError("--endpilot-commit must be a full lowercase 40-character SHA")
+        if installed_commit != args.endpilot_commit:
+            raise RuntimeError(
+                f"Installed EndPilot commit {installed_commit!r} does not match requested {args.endpilot_commit}"
+            )
+        results["checks"].append("endpilot_installed_commit_verified")
         server = Server(python, folder, logfile)
         server.start()
         server.wait_ready()
