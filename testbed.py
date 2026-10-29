@@ -293,7 +293,7 @@ async def exercise(server, results):
 
         # Prove player movement using a BDS-side entity-selector oracle, rather
         # than treating locally predicted bot.position or sent packets as success.
-        server.command(f"tp {PLAYER} 0.5 65 0.5")
+        server.command(f"tp {PLAYER} 0.5 101 0.5")
         deadline = loop.time() + 12
         while loop.time() < deadline and bot.get_status().position.y > 128:
             await asyncio.sleep(0.1)
@@ -307,7 +307,7 @@ async def exercise(server, results):
             latest = []
             while loop.time() < deadline:
                 offset = server.command(
-                    f"execute positioned {x} 65 0.5 if entity @a[name={PLAYER},r={radius}] run say {marker}"
+                    f"execute positioned {x} 101 0.5 if entity @a[name={PLAYER},r={radius}] run say {marker}"
                 )
                 await asyncio.sleep(0.2)
                 latest = server.snapshot(offset)
@@ -322,14 +322,14 @@ async def exercise(server, results):
 
         # The destination chunk is not loaded before teleport; building the
         # floor first makes BDS reject fill as outside the world.
-        fill_offset = server.command("fill 0 64 0 7 64 7 stone")
+        fill_offset = server.command("fill 0 100 0 7 100 7 stone")
         fill_deadline = loop.time() + 5
         while loop.time() < fill_deadline:
             fill_lines = server.snapshot(fill_offset)
-            if any("outside of the world" in line.lower() or "syntax error" in line.lower()
+            if any("ERROR" in line or "syntax error" in line.lower()
                    for line in fill_lines):
                 raise AssertionError(f"BDS did not create the movement platform: {fill_lines}")
-            if any("filled" in line.lower() for line in fill_lines):
+            if any("filled" in line.lower() and "ERROR" not in line for line in fill_lines):
                 results["platform_server_output"] = fill_lines
                 break
             await asyncio.sleep(0.1)
@@ -366,7 +366,7 @@ async def exercise(server, results):
         # player's *server-side* feet to enter x>=1, excluding spawn x=0.5,
         # without assuming a particular speed or precise eye height.
         destination_offset = server.command(
-            f"execute if entity @a[name={PLAYER},x=1,y=64,z=0,dx=6,dy=4,dz=1] "
+            f"execute if entity @a[name={PLAYER},x=1,y=100,z=0,dx=6,dy=4,dz=1] "
             "run say ENDPILOT_MOVED"
         )
         await asyncio.sleep(0.3)
