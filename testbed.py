@@ -358,7 +358,61 @@ async def exercise(server, results):
         assert displacement >= 0.5, f"BDS did not accept significant horizontal movement: {origin} -> {destination}"
         results["checks"].append("input_movement_server_confirmed")
 
+        # Two real RakNet players sharing one Runtime: closing one Session must
+        # not cancel the other Bot or corrupt its inbound packet state.
+        async def expect_players(count, *names):
+            recent = []
+            for _ in range(8):
+                _, recent = await asyncio.to_thread(server.player_online)
+                counts = [
+                    int(match.group(1))
+                    for line in recent if (match := PLAYER_COUNT.search(line))
+                ]
+                names_text = "\\n".join(recent).lower()
+                if counts and counts[-1] == count and all(name.lower() in names_text for name in names):
+                    return recent
+                await asyncio.sleep(0.2)
+            raise AssertionError(f"Expected BDS count={count} with {names}: {recent}")
+
+        other_name = "EndPilotPeer"
+        other = runtime.add_bot(BotOptions(
+            server_url="raknet://127.0.0.1:19132", transport="raknet",
+            protocol=2193, name=other_name, chunk_radius=16,
+        ))
+        await other.wait_ready(65)
+        results["two_bot_list"] = await expect_players(2, PLAYER, other_name)
+        results["checks"].append("two_bots_online_server_confirmed")
+
         await bot.disconnect()
+        results["single_survivor_list"] = await expect_players(1, other_name)
+        assert other.get_status().state == BotState.ready, "Peer disconnect stopped the surviving Bot"
+        observed_other = []
+
+        def observe_other(source, event):
+            if source is other and isinstance(event, PacketDecodedEvent) and event.packet.header.packet_id == 70:
+                observed_other.append(int(event.packet.payload.chunk_radius))
+
+        unsubscribe_other = runtime.subscribe(observe_other, events=event_mask(EventKind.packet_decoded))
+        other.send_packet(v2193.RequestChunkRadiusPacket(chunk_radius=7, max_chunk_radius=7))
+        deadline = loop.time() + 12
+        while loop.time() < deadline and (
+            not observed_other or other.get_status().chunk_radius != observed_other[-1]
+        ):
+            await asyncio.sleep(0.1)
+        unsubscribe_other()
+        assert observed_other and observed_other[-1] == 7, f"Surviving Bot missed server reply: {observed_other}"
+        assert other.get_status().state == BotState.ready
+        results["survivor_radius"] = observed_other[-1]
+        results["checks"].append("other_bot_survives_disconnect_and_packets")
+
+        await bot.reconnect()
+        await bot.wait_ready(65)
+        results["reconnected_two_bot_list"] = await expect_players(2, PLAYER, other_name)
+        assert other.get_status().state == BotState.ready
+        results["checks"].append("original_bot_reconnect_server_confirmed")
+
+        await bot.disconnect()
+        await other.disconnect()
         results["bds_offline_list"] = await asyncio.to_thread(server.wait_player, False)
         results["checks"].append("client_disconnect_server_confirmed")
 

@@ -2,7 +2,7 @@ name: Real BDS EndPilot Smoke
 
 on:
   push:
-    branches: [feat/endpilot-real-bds, test/endpilot-revision-validation, test/event-subscriptions, test/input-controls, main]
+    branches: [feat/endpilot-real-bds, test/endpilot-revision-validation, test/event-subscriptions, test/input-controls, test/multi-bot-reconnect, main]
   workflow_dispatch:
     inputs:
       endpilot_commit:
