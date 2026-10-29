@@ -205,7 +205,7 @@ def configure(path):
 
 async def exercise(server, results):
     from bedrock_protocol import v2193
-    from endpilot import BotOptions, BotState, EventKind, PacketDecodedEvent, Runtime, event_mask
+    from endpilot import BotOptions, BotState, EventKind, Input, PacketDecodedEvent, Runtime, TickEvent, Vec2, Vec3, event_mask
 
     radius_events = []
     observer_radii = []
@@ -290,6 +290,73 @@ async def exercise(server, results):
         results["checks"].append("independent_observers_fault_isolated")
         results["radius_after_rejection"] = second
         results["checks"].append("invalid_packet_isolation")
+
+        # A separate, server-authoritative oracle: BDS querytarget reports the
+        # entity's actual coordinates, unlike the client's predicted position.
+        server.command(f"tp {PLAYER} 0.5 101 0.5")
+        deadline = loop.time() + 12
+        while loop.time() < deadline and bot.get_status().position.y > 128:
+            await asyncio.sleep(0.1)
+        if bot.get_status().position.y > 128:
+            raise AssertionError("Client never observed BDS teleport")
+
+        async def authoritative_position():
+            offset = server.command(f"querytarget {PLAYER}")
+            deadline = loop.time() + 5
+            while loop.time() < deadline:
+                lines = server.snapshot(offset)
+                fields = [line.partition("]:")[2].strip() for line in lines]
+                start = next((i for i, value in enumerate(fields) if value.startswith("Target data:")), None)
+                if start is not None:
+                    stop = next((i for i in range(start + 1, len(fields)) if fields[i] == "]"), None)
+                    if stop is not None:
+                        document = fields[start].split("Target data:", 1)[1] + " ".join(
+                            fields[start + 1:stop + 1]
+                        )
+                        targets = json.loads(document)
+                        if len(targets) != 1 or targets[0]["dimension"] != 0:
+                            raise AssertionError(f"Unexpected BDS target response: {targets}")
+                        return targets[0]["position"]
+                if any("unknown command" in line.lower() or "syntax error" in line.lower() for line in lines):
+                    raise AssertionError(f"BDS querytarget unavailable: {lines}")
+                await asyncio.sleep(0.1)
+            raise TimeoutError(f"No complete BDS querytarget response: {server.snapshot(offset)}")
+
+        origin = await authoritative_position()
+        results["start_server_position"] = origin
+        assert abs(origin["x"] - 0.5) < 1, f"BDS did not teleport to the initial x: {origin}"
+        results["checks"].append("server_position_origin_confirmed")
+
+        # Independent third-party behavior using only public event and input APIs.
+        submitted = 0
+
+        def walk(_bot, event):
+            nonlocal submitted
+            if not isinstance(event, TickEvent) or submitted >= 34:
+                return
+            position = _bot.get_status().position
+            _bot.set_input(Input(
+                position=Vec3(position.x + 0.09, position.y, position.z),
+                delta=Vec3(0.09, 0, 0),
+                move=Vec2(1, 0),
+                sprinting=True,
+                flags=("START_SPRINTING",) if submitted == 0 else (),
+            ))
+            submitted += 1
+
+        stop_walking = runtime.subscribe(walk, events=event_mask(EventKind.tick))
+        deadline = loop.time() + 6
+        while submitted < 34 and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        stop_walking()
+        results["input_frames"] = submitted
+        assert submitted == 34 and bot.get_status().state == BotState.ready
+        destination = await authoritative_position()
+        results["end_server_position"] = destination
+        displacement = math.hypot(destination["x"] - origin["x"], destination["z"] - origin["z"])
+        results["server_horizontal_displacement"] = displacement
+        assert displacement >= 0.5, f"BDS did not accept significant horizontal movement: {origin} -> {destination}"
+        results["checks"].append("input_movement_server_confirmed")
 
         await bot.disconnect()
         results["bds_offline_list"] = await asyncio.to_thread(server.wait_player, False)
