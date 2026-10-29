@@ -205,7 +205,7 @@ def configure(path):
 
 async def exercise(server, results):
     from bedrock_protocol import v2193
-    from endpilot import BotOptions, BotState, EventKind, PacketDecodedEvent, Runtime, event_mask
+    from endpilot import BotOptions, BotState, EventKind, Input, PacketDecodedEvent, Runtime, TickEvent, Vec2, Vec3, event_mask
 
     radius_events = []
     observer_radii = []
@@ -290,6 +290,65 @@ async def exercise(server, results):
         results["checks"].append("independent_observers_fault_isolated")
         results["radius_after_rejection"] = second
         results["checks"].append("invalid_packet_isolation")
+
+        # Prove player movement using a BDS-side entity-selector oracle, rather
+        # than treating locally predicted bot.position or sent packets as success.
+        server.command("fill -8 63 -8 8 63 8 stone")
+        server.command(f"tp {PLAYER} 0.5 65 0.5")
+        deadline = loop.time() + 12
+        while loop.time() < deadline and bot.get_status().position.y > 128:
+            await asyncio.sleep(0.1)
+        teleported = bot.get_status().position
+        results["teleported_client_position"] = [teleported.x, teleported.y, teleported.z]
+        if teleported.y > 128:
+            raise AssertionError("Client never observed BDS teleport to the test platform")
+
+        async def position_oracle(x, marker, timeout=6):
+            deadline = loop.time() + timeout
+            latest = []
+            while loop.time() < deadline:
+                offset = server.command(
+                    f"execute positioned {x} 65 0.5 if entity @a[name={PLAYER},r=1.3] run say {marker}"
+                )
+                await asyncio.sleep(0.2)
+                latest = server.snapshot(offset)
+                if any(marker in line for line in latest):
+                    return latest
+                if any("syntax error" in line.lower() for line in latest):
+                    raise AssertionError(f"Server entity-selector oracle failed: {latest}")
+            raise AssertionError(f"Server did not confirm player at x={x}; response: {latest}")
+
+        results["origin_server_oracle"] = await position_oracle(0.5, "ENDPILOT_ORIGIN")
+        results["checks"].append("server_position_origin_confirmed")
+
+        submitted = 0
+
+        def walk(_bot, event):
+            nonlocal submitted
+            if not isinstance(event, TickEvent) or submitted >= 34:
+                return
+            position = _bot.get_status().position
+            _bot.set_input(Input(
+                position=Vec3(position.x + 0.09, position.y, position.z),
+                delta=Vec3(0.09, 0, 0),
+                move=Vec2(1, 0),
+                sprinting=True,
+                flags=("START_SPRINTING",) if submitted == 0 else (),
+            ))
+            submitted += 1
+
+        stop_walking = runtime.subscribe(walk, events=event_mask(EventKind.tick))
+        deadline = loop.time() + 6
+        while submitted < 34 and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        stop_walking()
+        results["input_frames"] = submitted
+        results["predicted_client_position"] = [
+            bot.get_status().position.x, bot.get_status().position.y, bot.get_status().position.z
+        ]
+        assert submitted == 34 and bot.get_status().state == BotState.ready
+        results["destination_server_oracle"] = await position_oracle(3.0, "ENDPILOT_MOVED", timeout=8)
+        results["checks"].append("input_movement_server_confirmed")
 
         await bot.disconnect()
         results["bds_offline_list"] = await asyncio.to_thread(server.wait_player, False)
