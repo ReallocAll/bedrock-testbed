@@ -512,7 +512,20 @@ async def exercise(server, results):
         server.command("fill -2 220 -2 6 220 3 stone")
         # Prepare a village bed before the trader spawns and can claim it.
         server.command('setblock 3 221 2 minecraft:bed ["direction"=0,"head_piece_bit"=false]')
-        server.command('testforblock 3 221 3 minecraft:bed ["head_piece_bit"=true]')
+        bed_probe = server.command(
+            'execute if block 3 221 2 minecraft:bed ["head_piece_bit"=false] run say BED_FOOT_CONFIRMED'
+        )
+        server.command(
+            'execute if block 3 221 3 minecraft:bed ["head_piece_bit"=true] run say BED_HEAD_CONFIRMED'
+        )
+        deadline = loop.time() + 5
+        while loop.time() < deadline:
+            bed_output = "\n".join(server.snapshot(bed_probe))
+            if "BED_FOOT_CONFIRMED" in bed_output and "BED_HEAD_CONFIRMED" in bed_output:
+                break
+            await asyncio.sleep(0.1)
+        else:
+            raise AssertionError(f"BDS two-block bed not verified: {server.snapshot(bed_probe)}")
         server.command(f"tp {PLAYER} 0.5 221 0.5")
         server.command("summon villager 2.5 221 0.5")
         deadline = loop.time() + 12
