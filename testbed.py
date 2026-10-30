@@ -562,6 +562,96 @@ async def exercise(server, results):
         ]
         results["checks"].append("villager_trade_window_server_confirmed")
 
+        # A single real Trade2 exchange: use a server-generated quote, and
+        # let BDS supply the ingredient. Every item request requires status 0.
+        allowed_ingredients = {
+            "minecraft:stick": "stick", "minecraft:flint": "flint",
+            "minecraft:feather": "feather", "minecraft:wheat": "wheat",
+            "minecraft:carrot": "carrot", "minecraft:potato": "potato",
+            "minecraft:coal": "coal", "minecraft:string": "string",
+            "minecraft:paper": "paper",
+        }
+        quote = next((
+            offer for offer in offers.offers
+            if offer.supported and offer.ref is not None
+            and offer.input is not None and offer.second_input is None
+            and offer.input.identifier in allowed_ingredients
+            and offer.input.count < 64 and offer.output is not None
+            and offer.uses < offer.max_uses
+        ), None)
+        assert quote is not None, f"No server-offered, single-ingredient trade: {results['villager']}"
+        ingredient = quote.input
+        output = quote.output
+        amount = ingredient.count + 1
+        player_source_count = bot.count_player_item(ingredient.identifier).observed_count
+        player_output_count = bot.count_player_item(output.identifier).observed_count
+        server.command(f"give {PLAYER} {allowed_ingredients[ingredient.identifier]} {amount}")
+        deadline = loop.time() + 10
+        source = None
+        while loop.time() < deadline:
+            source = next((
+                slot for slot in bot.get_player_inventory()
+                if slot.identifier == ingredient.identifier and slot.count >= amount
+            ), None)
+            if source is not None:
+                break
+            await asyncio.sleep(0.1)
+        assert source is not None, "BDS-granted trade ingredient was not observed"
+        input_slot = bot.trade_input(window.ref, 0)
+        deadline = loop.time() + 8
+        while bot.get_item(input_slot).state == SlotState.unknown and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        assert bot.get_item(input_slot).state == SlotState.empty, "BDS trade input not known empty"
+
+        async def confirm_trade_op(operation, step):
+            result = await operation.wait(12)
+            assert result.outcome == ItemRequestOutcome.completed and result.server_result == 0, (
+                f"BDS rejected {step}: {result}"
+            )
+            return result.server_result
+
+        stage_status = await confirm_trade_op(
+            bot.begin_move_item(source.slot, input_slot, amount), "stage ingredient"
+        )
+        assert bot.get_item(input_slot).identifier == ingredient.identifier
+        assert bot.get_item(input_slot).count == amount, "Staged ingredient amount differs"
+        fresh = next((
+            candidate for candidate in bot.get_trade_offers(window.ref).offers
+            if candidate.ref is not None and candidate.ref.recipe_net_id == quote.ref.recipe_net_id
+        ), None)
+        assert fresh is not None and fresh.supported, "Trade quote changed during staging"
+        destination = next((
+            slot.slot for slot in bot.get_player_inventory()
+            if slot.slot.index >= 9 and slot.state == SlotState.empty
+        ), None)
+        assert destination is not None, "No known empty output inventory slot"
+        trade_status = await confirm_trade_op(bot.begin_trade(fresh.ref, destination), "trade")
+        assert bot.get_item(destination).identifier == output.identifier
+        assert bot.get_item(destination).count == output.count, "No server-confirmed trade output"
+        assert bot.get_item(input_slot).count == 1, "Trade did not leave staged input residual"
+        return_status = await confirm_trade_op(
+            bot.begin_move_item(input_slot, source.slot, 1), "return residual"
+        )
+        assert bot.get_item(input_slot).state == SlotState.empty, "Residual was not returned"
+        assert bot.count_player_item(ingredient.identifier).observed_count == (
+            player_source_count + amount - ingredient.count
+        ), "Input conservation failed"
+        assert bot.count_player_item(output.identifier).observed_count == (
+            player_output_count + output.count
+        ), "Output conservation failed"
+        results["villager"]["trade"] = {
+            "input": ingredient.identifier, "price": ingredient.count,
+            "output": output.identifier, "output_count": output.count,
+            "stage_status": stage_status, "trade_status": trade_status,
+            "return_status": return_status,
+        }
+        bot.close_container(window.ref)
+        deadline = loop.time() + 8
+        while bot.get_trade_window() is not None and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        assert bot.get_trade_window() is None, "BDS trade window was not closed"
+        results["checks"].append("villager_trade_exchange_server_confirmed")
+
         # Two real RakNet players sharing one Runtime: closing one Session must
         # not cancel the other Bot or corrupt its inbound packet state.
         async def expect_players(count, *names):
