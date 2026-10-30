@@ -666,6 +666,43 @@ async def exercise(server, results):
             stop_close_observer()
         results["checks"].append("villager_trade_exchange_server_confirmed")
 
+        # A fresh BDS trade window is an independent oracle for recipe usage:
+        # a successful Trade2 response alone cannot prove villager progression.
+        bot.interact_actor(target.ref, Vec3(0, 1, 0))
+        deadline = loop.time() + 8
+        while bot.get_trade_window() is None and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        current_window = bot.get_trade_window()
+        assert current_window is not None, "BDS did not reopen the villager trade window"
+        deadline = loop.time() + 8
+        progressed = None
+        while loop.time() < deadline:
+            current_offers = bot.get_trade_offers(current_window.ref)
+            progressed = next((
+                offer for offer in current_offers.offers
+                if offer.ref is not None and offer.ref.recipe_net_id == quote.ref.recipe_net_id
+            ), None) if current_offers is not None else None
+            if progressed is not None:
+                break
+            await asyncio.sleep(0.1)
+        assert progressed is not None, "BDS did not resend the traded recipe"
+        results["villager"]["usage"] = {
+            "recipe_net_id": quote.ref.recipe_net_id,
+            "before": quote.uses,
+            "after": progressed.uses,
+            "max_uses": progressed.max_uses,
+        }
+        assert progressed.uses == quote.uses + 1, (
+            f"Successful BDS trade did not advance recipe uses exactly once: {results['villager']['usage']}"
+        )
+        assert progressed.max_uses == quote.max_uses, "BDS changed recipe exhaustion limit"
+        bot.close_container(current_window.ref)
+        deadline = loop.time() + 8
+        while bot.get_trade_window() is not None and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        assert bot.get_trade_window() is None, "Reopened trade window remained open"
+        results["checks"].append("villager_recipe_usage_server_confirmed")
+
         # Two real RakNet players sharing one Runtime: closing one Session must
         # not cancel the other Bot or corrupt its inbound packet state.
         async def expect_players(count, *names):
