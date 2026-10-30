@@ -511,12 +511,13 @@ async def exercise(server, results):
         ))
         server.command("fill -2 220 -2 6 220 3 stone")
         # Prepare a village bed before the trader spawns and can claim it.
-        server.command('setblock 3 221 2 minecraft:bed ["direction"=0,"head_piece_bit"=false]')
+        server.command('setblock 3 221 2 minecraft:bed ["direction"=0,"head_piece_bit"=false] strict')
+        server.command('setblock 3 221 3 minecraft:bed ["direction"=0,"head_piece_bit"=true] strict')
         bed_probe = server.command(
-            'execute if block 3 221 2 minecraft:bed ["head_piece_bit"=false] run say BED_FOOT_CONFIRMED'
+            'execute if block 3 221 2 minecraft:bed run say BED_FOOT_CONFIRMED'
         )
         server.command(
-            'execute if block 3 221 3 minecraft:bed ["head_piece_bit"=true] run say BED_HEAD_CONFIRMED'
+            'execute if block 3 221 3 minecraft:bed run say BED_HEAD_CONFIRMED'
         )
         deadline = loop.time() + 5
         while loop.time() < deadline:
