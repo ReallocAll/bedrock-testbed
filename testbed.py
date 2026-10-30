@@ -1055,6 +1055,89 @@ async def exercise(server, results):
         assert current.uses == 0, "Natural BDS restock did not reset recipe uses"
         results["checks"].append("villager_natural_restock_server_confirmed")
 
+        # Prove the restocked quote is usable, not merely an updated counter:
+        # perform another real Trade2 with the newly advertised input price.
+        bot.interact_actor(new_target.ref, Vec3(0, 1, 0))
+        deadline = loop.time() + 8
+        while bot.get_trade_window() is None and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        restocked_window = bot.get_trade_window()
+        assert restocked_window is not None, "Could not reopen naturally restocked villager"
+        latest = bot.get_trade_offers(restocked_window.ref)
+        restocked_offer = next((
+            row for row in latest.offers
+            if row.ref and row.ref.recipe_net_id == quote.ref.recipe_net_id
+        ), None) if latest is not None else None
+        assert (
+            restocked_offer is not None and restocked_offer.supported
+            and restocked_offer.uses == 0
+            and restocked_offer.input is not None
+            and restocked_offer.input.identifier == ingredient.identifier
+            and restocked_offer.second_input is None
+            and restocked_offer.output is not None
+            and restocked_offer.output.identifier == output.identifier
+            and 1 <= restocked_offer.input.count < 64
+        ), f"Restocked BDS quote changed unexpectedly: {restocked_offer}"
+        price = restocked_offer.input.count
+        provided = price + 1
+        before_ingredient = bot.count_player_item(ingredient.identifier).observed_count
+        before_emeralds = bot.count_player_item(output.identifier).observed_count
+        server.command(f"give {PLAYER} {ingredient.identifier} {provided}")
+        deadline = loop.time() + 10
+        source = None
+        while loop.time() < deadline:
+            count = bot.count_player_item(ingredient.identifier)
+            source = next((
+                item for item in bot.get_player_inventory()
+                if item.identifier == ingredient.identifier and item.count >= provided
+            ), None)
+            if count.complete and count.observed_count == before_ingredient + provided and source:
+                break
+            await asyncio.sleep(0.1)
+        assert source is not None and count.complete and (
+            count.observed_count == before_ingredient + provided
+        ), "Restocked BDS input grant did not settle"
+        input_slot = bot.trade_input(restocked_window.ref, 0)
+        assert bot.get_item(input_slot).state == SlotState.empty
+        await confirm_trade_op(
+            bot.begin_move_item(source.slot, input_slot, provided), "restock stage"
+        )
+        latest = bot.get_trade_offers(restocked_window.ref)
+        restocked_offer = next((
+            row for row in latest.offers
+            if row.ref and row.ref.recipe_net_id == quote.ref.recipe_net_id
+        ), None)
+        assert restocked_offer is not None and restocked_offer.input.count == price
+        destination = next((
+            item.slot for item in bot.get_player_inventory()
+            if item.slot.index >= 9 and item.state == SlotState.empty
+        ), None)
+        assert destination is not None, "No restock trade destination"
+        await confirm_trade_op(
+            bot.begin_trade(restocked_offer.ref, destination), "restock exchange"
+        )
+        assert bot.get_item(destination).identifier == output.identifier
+        assert bot.get_item(destination).count == output.count
+        assert bot.get_item(input_slot).count == 1
+        await confirm_trade_op(
+            bot.begin_move_item(input_slot, source.slot, 1), "restock return"
+        )
+        assert bot.get_item(input_slot).state == SlotState.empty
+        assert bot.count_player_item(ingredient.identifier).observed_count == (
+            before_ingredient + provided - price
+        ), "Restocked input conservation failed"
+        assert bot.count_player_item(output.identifier).observed_count == (
+            before_emeralds + output.count
+        ), "Restocked output conservation failed"
+        results["villager"]["restock"]["new_price"] = price
+        results["villager"]["restock"]["second_trade_server_confirmed"] = True
+        bot.close_container(restocked_window.ref)
+        deadline = loop.time() + 8
+        while bot.get_trade_window() is not None and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        assert bot.get_trade_window() is None
+        results["checks"].append("villager_restocked_trade_server_confirmed")
+
         await bot.disconnect()
         await other.disconnect()
         results["bds_offline_list"] = await expect_players(0)
