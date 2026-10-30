@@ -571,7 +571,7 @@ async def exercise(server, results):
                 raw_flags = (("START_" if enabled else "STOP_") + phase.upper(),)
             if phase == "sneaking":
                 if enabled:
-                    raw_flags += ("SNEAK_DOWN", "SNEAK_CURRENT_RAW")
+                    raw_flags += ("SNEAK_DOWN", "SNEAK_CURRENT_RAW", "WANT_DOWN")
                     if sent == 0:
                         raw_flags += ("SNEAK_PRESSED_RAW",)
                 elif sent == 0:
