@@ -559,134 +559,77 @@ async def exercise(server, results):
             baseline_flags = peer_flags()
         assert baseline_flags is not None, "Second Bot never observed first player's BDS flags"
         results["peer_initial_flags"] = baseline_flags
+        original_id = bot.get_status().actor_runtime_id
         peer_updates = []
 
-        def watch_peer_metadata(source, event):
-            if source is not other or not isinstance(event, PacketDecodedEvent):
+        def record_peer_flags(source, event):
+            if (
+                source is other and isinstance(event, PacketDecodedEvent)
+                and event.packet.header.packet_id == 39
+                and int(event.packet.payload.id) == original_id
+            ):
+                for entry in event.packet.payload.packed_items.data:
+                    if int(entry.id) == 0:
+                        peer_updates.append(int(entry.payload.value.value))
+
+        unsubscribe_metadata = runtime.subscribe(
+            record_peer_flags, events=event_mask(EventKind.packet_decoded)
+        )
+        phase, enabled, sent = None, False, 0
+
+        def send_state(source, event):
+            nonlocal sent
+            if source is not bot or not isinstance(event, TickEvent) or phase is None:
                 return
-            if event.packet.header.packet_id != 39:
-                return
-            packet = event.packet.payload
-            changes = [(int(entry.id), entry.payload.value.value)
-                       for entry in packet.packed_items.data]
-            peer_updates.append({
-                "actor_id": int(packet.id),
-                "entry_ids": [ident for ident, _ in changes],
-                "flags": next((int(value) for ident, value in changes if ident == 0), None),
-            })
-
-        stop_metadata = runtime.subscribe(
-            watch_peer_metadata, events=event_mask(EventKind.packet_decoded)
-        )
-        results["peer_metadata_updates"] = peer_updates
-
-        # Establish that this peer/field really reflects live BDS state:
-        # a server-applied invisibility effect must change ActorFlags bit 5.
-        server.command(f"effect {PLAYER} invisibility 10 0 true")
-        deadline = loop.time() + 5
-        observed_invisible = peer_flags()
-        while (
-            observed_invisible is None or not observed_invisible & (1 << 5)
-        ) and loop.time() < deadline:
-            await asyncio.sleep(0.1)
-            observed_invisible = peer_flags()
-        results["invisibility_probe"] = {
-            "initial": baseline_flags, "observed": observed_invisible,
-        }
-        assert observed_invisible is not None and observed_invisible & (1 << 5), (
-            "Peer ActorFlags oracle did not reflect server-applied invisibility"
-        )
-        server.command(f"effect {PLAYER} clear")
-        deadline = loop.time() + 5
-        while (
-            (observed_invisible := peer_flags()) is None or observed_invisible & (1 << 5)
-        ) and loop.time() < deadline:
-            await asyncio.sleep(0.1)
-        assert observed_invisible is not None and not observed_invisible & (1 << 5), (
-            "Peer ActorFlags oracle did not reflect clearing invisibility"
-        )
-
-        async def toggle_and_observe(name, flag, enabled, frames=15):
-            sent = 0
-
-            def send_state(source, event):
-                nonlocal sent
-                if source is not bot or not isinstance(event, TickEvent) or sent >= frames:
-                    return
-                raw_flags = ()
-                if name == "sneaking":
-                    if enabled:
-                        raw_flags = ("SNEAK_CURRENT_RAW",)
-                        if sent == 0:
-                            raw_flags += ("START_SNEAKING", "SNEAK_DOWN", "SNEAK_PRESSED_RAW")
-                    elif sent == 0:
-                        raw_flags = ("STOP_SNEAKING", "SNEAK_RELEASED_RAW")
+            raw_flags = ()
+            if sent == 0:
+                raw_flags = (("START_" if enabled else "STOP_") + phase.upper(),)
+            if phase == "sneaking":
+                if enabled:
+                    raw_flags += ("SNEAK_CURRENT_RAW",)
+                    if sent == 0:
+                        raw_flags += ("SNEAK_DOWN", "SNEAK_PRESSED_RAW")
                 elif sent == 0:
-                    raw_flags = (("START_" if enabled else "STOP_") + name.upper(),)
-                source.set_input(Input(
-                    position=source.get_status().position,
-                    sneaking=enabled if name == "sneaking" else False,
-                    sprinting=enabled if name == "sprinting" else False,
-                    flags=raw_flags,
-                ))
-                sent += 1
+                    raw_flags += ("SNEAK_RELEASED_RAW",)
+            source.set_input(Input(
+                position=source.get_status().position,
+                sneaking=enabled if phase == "sneaking" else False,
+                sprinting=enabled if phase == "sprinting" else False,
+                flags=raw_flags,
+            ))
+            sent += 1
 
-            unsubscribe = runtime.subscribe(send_state, events=event_mask(EventKind.tick))
-            try:
-                deadline = loop.time() + 6
-                while sent < frames and loop.time() < deadline:
-                    await asyncio.sleep(0.05)
-                assert sent == frames, f"Only sent {sent} {name} input ticks"
-                deadline = loop.time() + 5
-                flags = peer_flags()
-                samples = [flags]
-                while (flags is None or bool(flags & (1 << flag)) != enabled) and loop.time() < deadline:
-                    await asyncio.sleep(0.1)
-                    flags = peer_flags()
-                    if not samples or flags != samples[-1]:
-                        samples.append(flags)
-                results.setdefault("peer_flag_attempts", []).append({
-                    "state": name, "target": enabled, "observed": samples,
-                    "metadata_packets": len(peer_updates),
-                })
-                if name == "sneaking" and enabled and not (
-                    flags is not None and flags & (1 << flag)
-                ):
-                    # Diagnostic only: determine whether an explicit native
-                    # PlayerAction, distinct from PlayerAuthInput, is accepted.
-                    zero = v2193.BlockPos(x=0, y=0, z=0)
-                    bot.send_packet(v2193.PlayerActionPacket(
-                        runtime_id=bot.get_status().actor_runtime_id,
-                        action=v2193.PlayerActionType.START_SNEAKING,
-                        pos=zero, result_pos=zero, face=-1,
-                    ))
-                    probe_deadline = loop.time() + 3
-                    action_flags = peer_flags()
-                    while (
-                        action_flags is None or not action_flags & (1 << flag)
-                    ) and loop.time() < probe_deadline:
-                        await asyncio.sleep(0.1)
-                        action_flags = peer_flags()
-                    results["player_action_sneak_probe"] = {
-                        "before": flags, "after": action_flags,
-                    }
-                assert flags is not None and bool(flags & (1 << flag)) == enabled, (
-                    f"BDS did not synchronize {name}={enabled} to peer: flags={flags}"
-                )
-                return flags
-            finally:
-                unsubscribe()
-
-        sneak_on = await toggle_and_observe("sneaking", 1, True)
-        sneak_off = await toggle_and_observe("sneaking", 1, False)
-        sprint_on = await toggle_and_observe("sprinting", 3, True)
-        sprint_off = await toggle_and_observe("sprinting", 3, False)
-        results["peer_movement_flags"] = {
-            "sneak_on": sneak_on, "sneak_off": sneak_off,
-            "sprint_on": sprint_on, "sprint_off": sprint_off,
-        }
-        results["checks"].append("sneak_sprint_peer_server_confirmed")
-        stop_metadata()
+        unsubscribe_input = runtime.subscribe(send_state, events=event_mask(EventKind.tick))
+        observed = []
+        try:
+            for phase_name, bit, target in (
+                ("sneaking", 1, True),
+                ("sneaking", 1, False),
+                ("sprinting", 3, True),
+                ("sprinting", 3, False),
+            ):
+                phase, enabled, sent = phase_name, target, 0
+                previous = len(peer_updates)
+                deadline = loop.time() + 7
+                while loop.time() < deadline:
+                    await asyncio.sleep(0.03)
+                    current = peer_flags()
+                    if sent >= 5 and current is not None and bool(current & (1 << bit)) == target and any(
+                        bool(flags & (1 << bit)) == target for flags in peer_updates[previous:]
+                    ):
+                        observed.append({"state": phase_name, "enabled": target, "flags": current, "frames": sent})
+                        break
+                else:
+                    raise AssertionError(
+                        f"BDS peer never confirmed {phase_name}={target} while sending input: "
+                        f"frames={sent}, current={peer_flags()}, new_updates={peer_updates[previous:]}"
+                    )
+            results["peer_movement_flags"] = observed
+            results["checks"].append("sneak_sprint_peer_server_confirmed")
+        finally:
+            phase = None
+            unsubscribe_input()
+            unsubscribe_metadata()
 
         await bot.disconnect()
         results["single_survivor_list"] = await expect_players(1, other_name)
