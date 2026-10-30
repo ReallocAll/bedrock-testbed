@@ -70,7 +70,9 @@ an authoritative ItemStackResponse. Item totals must remain four.
 Final `list` verifies **zero players online**, rather than only the
 absence of the original Bot. A real BDS villager is summoned within interaction range, and EndPilot
 uses only its public entity reference, trade-window and item-request APIs.
-Since BDS chooses the villager profession and quotes, the smoke selects a
+The test explicitly chooses a vanilla farmer spawn event so BDS cannot
+randomly summon an untradeable nitwit; BDS still generates the actual quote.
+The smoke selects a
 single-ingredient, currently available trade that sells an emerald, grants
 the quoted input through BDS, stages one surplus item, executes the Trade2
 request, returns the residual and verifies item conservation. Each request
