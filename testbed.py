@@ -400,7 +400,8 @@ async def exercise(server, results):
             position = source.get_status().position
             source.set_input(Input(
                 position=position, jumping=True,
-                flags=("START_JUMPING",) if jump_sent == 0 else (),
+                flags=("JUMP_DOWN", "JUMP_CURRENT_RAW", "START_JUMPING", "JUMP_PRESSED_RAW")
+                if jump_sent == 0 else ("JUMP_DOWN", "JUMP_CURRENT_RAW"),
             ))
             jump_sent += 1
 
@@ -598,9 +599,9 @@ async def exercise(server, results):
                 raw_flags = (("START_" if enabled else "STOP_") + phase.upper(),)
             if phase == "sneaking":
                 if enabled:
-                    raw_flags += ("SNEAK_CURRENT_RAW",)
+                    raw_flags += ("SNEAK_DOWN", "SNEAK_CURRENT_RAW")
                     if sent == 0:
-                        raw_flags += ("SNEAK_DOWN", "SNEAK_PRESSED_RAW")
+                        raw_flags += ("SNEAK_PRESSED_RAW",)
                 elif sent == 0:
                     raw_flags += ("SNEAK_RELEASED_RAW",)
             if phase == "sprinting" and enabled:
