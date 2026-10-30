@@ -9,7 +9,7 @@ on:
         description: 'Exact EndPilot commit SHA (40 lowercase hex characters)'
         required: false
         type: string
-        default: 'cdfd95c859fe2983b62d70a7598f258ddf72d870'
+        default: 'f0f9e9a57d1cca142ad5779fa9a3fbccbfbe7ae1'
 
 permissions:
   contents: read
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || 'cdfd95c859fe2983b62d70a7598f258ddf72d870' }}
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || 'f0f9e9a57d1cca142ad5779fa9a3fbccbfbe7ae1' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,6 +36,7 @@ jobs:
         run: |
           python -m venv .venv-server
           .venv-server/bin/python -m pip install 'endstone==0.11.14'
+          .venv-server/bin/python -m pip install --no-deps ./diagnostics/input_probe
       - name: Get pinned protocol compiler wheel
         uses: actions/download-artifact@v4
         with:

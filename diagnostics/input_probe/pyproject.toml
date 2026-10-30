@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "endstone-input-probe"
+version = "0.0.1"
+requires-python = ">=3.11"
+
+[project.entry-points."endstone"]
+input-probe = "endstone_input_probe:InputProbe"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
