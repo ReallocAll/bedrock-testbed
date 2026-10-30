@@ -719,6 +719,67 @@ async def exercise(server, results):
         assert other.get_status().state == BotState.ready
         results["checks"].append("original_bot_reconnect_server_confirmed")
 
+        # Old BDS entity, window and quote refs cannot cross Session lifetime.
+        rejected = []
+        for label, expected_error, action in (
+            ("window", "stale or foreign trade window", lambda: bot.get_trade_offers(window.ref)),
+            ("actor", "stale or foreign entity", lambda: bot.interact_actor(target.ref)),
+            ("quote", "stale or foreign trade window", lambda: bot.begin_trade(fresh.ref, destination)),
+        ):
+            try:
+                action()
+            except RuntimeError as error:
+                assert str(error) == expected_error, f"{label} failed for unrelated reason: {error}"
+                rejected.append(label)
+            else:
+                raise AssertionError(f"Stale trade reference accepted after reconnect: {label}")
+        assert bot.get_status().session_id != window.ref.session_id
+
+        deadline = loop.time() + 12
+        new_target = None
+        while loop.time() < deadline:
+            new_target = next((
+                actor for actor in bot.get_observed_entities()
+                if actor.ref.unique_id == target.ref.unique_id
+                and actor.type in ("minecraft:villager", "minecraft:villager_v2")
+            ), None)
+            if new_target is not None:
+                break
+            await asyncio.sleep(0.1)
+        assert new_target is not None, "BDS villager missing after reconnect"
+        position = bot.get_status().position
+        dx = new_target.position.x - position.x
+        dy = new_target.position.y + 1 - position.y
+        dz = new_target.position.z - position.z
+        bot.set_look(-math.degrees(math.atan2(dy, math.hypot(dx, dz))), math.degrees(math.atan2(-dx, dz)))
+        await asyncio.sleep(0.3)
+        bot.interact_actor(new_target.ref, Vec3(0, 1, 0))
+        deadline = loop.time() + 8
+        while bot.get_trade_window() is None and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        reopened = bot.get_trade_window()
+        assert reopened is not None and reopened.ref.session_id == bot.get_status().session_id, (
+            "No new BDS trade window after reconnect"
+        )
+        deadline = loop.time() + 8
+        new_offers = bot.get_trade_offers(reopened.ref)
+        while (new_offers is None or not new_offers.offers) and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+            new_offers = bot.get_trade_offers(reopened.ref)
+        assert new_offers is not None and new_offers.offers, "No new BDS trade offers"
+        results["villager"]["reconnect"] = {
+            "stale_rejections": rejected,
+            "old_session_id": window.ref.session_id,
+            "new_session_id": reopened.ref.session_id,
+            "new_offer_count": len(new_offers.offers),
+        }
+        bot.close_container(reopened.ref)
+        deadline = loop.time() + 8
+        while bot.get_trade_window() is not None and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        assert bot.get_trade_window() is None, "Reconnected trade window did not close"
+        results["checks"].append("trade_references_rejected_and_reopened_after_reconnect")
+
         await bot.disconnect()
         await other.disconnect()
         results["bds_offline_list"] = await expect_players(0)
