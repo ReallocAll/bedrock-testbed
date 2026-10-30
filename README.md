@@ -2,7 +2,7 @@
 
 Minimal real-server smoke tests on Ubuntu 24.04 x86-64. Server: **Endstone
 0.11.14 / BDS 1.26.52 / protocol 2193** on Python 3.13. Client: EndPilot
-`9ba1977bd5b589b1b38827f7149348190eadfe44` (default, overridable) on Python 3.12.
+`73b26f632d4dc6f04f9448bacc1928fedc7b7ff2` (default, overridable) on Python 3.12.
 
 The client's `bedrock-protocol-native==0.5.0.dev0` is not on PyPI. Use the
 CI-verified `python-pure` and `python-native-Linux` CPython 3.12 wheels from
@@ -24,9 +24,9 @@ python3.13 -m venv .venv-server
 python3.12 -m venv .venv-client
 # Extract the pinned artifacts to dependencies/pure and dependencies/native first.
 .venv-client/bin/python -m pip install dependencies/pure/*.whl dependencies/native/*.whl \
-  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@9ba1977bd5b589b1b38827f7149348190eadfe44'
+  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@73b26f632d4dc6f04f9448bacc1928fedc7b7ff2'
 .venv-client/bin/python testbed.py --server-python .venv-server/bin/python \
-  --endpilot-commit 9ba1977bd5b589b1b38827f7149348190eadfe44
+  --endpilot-commit 73b26f632d4dc6f04f9448bacc1928fedc7b7ff2
 ```
 
 Use Actions **Run workflow** with the optional `endpilot_commit` input to test an exact
@@ -57,7 +57,18 @@ not a count of submitted input frames or the client's predicted position.
 The same Runtime also connects two named Bots to BDS, verifies server-side
 player counts (2 → 1 → 2 → 0), checks that the surviving Bot still receives a
 packet response after its peer disconnects, and reconnects the original Bot
-after input execution. No additional server boot or Bot manager is required.
+after input execution. The high-altitude movement test confirms active
+server gravity before asserting horizontal displacement. A stable
+server-built platform enables the authoritative jump-height check.
+
+The inventory scenario confirms BDS acknowledges public
+`InteractPacket(Action.OPEN_INVENTORY)` with `ContainerOpenPacket`.
+BDS grants four emeralds; the Bot observes their identity/count through
+the Item Registry, moves one from hotbar to main inventory, and awaits
+an authoritative ItemStackResponse. Item totals must remain four.
+Final `list` verifies **zero players online**, rather than only the
+absence of the original Bot. The current smoke includes **19 checks**.
+No additional server boot or Bot manager is required.
 
 No production servers/worlds, generic adapters, custom packet codecs or test
 controllers are involved. The server world and process are never cached.
