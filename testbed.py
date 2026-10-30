@@ -526,6 +526,8 @@ async def exercise(server, results):
                 f"client=({local.x}, {local.y}, {local.z}), previous_y={previous_server_y}"
             )
 
+        stable_authoritative_position = Vec3(grounded["x"], grounded["y"], grounded["z"])
+
         def peer_flags():
             players = [actor for actor in other.get_observed_entities()
                        if actor.type == "minecraft:player"]
@@ -580,7 +582,8 @@ async def exercise(server, results):
                 raw_flags += ("SPRINT_DOWN",)
             moving = phase == "sprinting" and enabled
             delta = Vec3(0, 0, 0.09) if moving else Vec3()
-            position = source.get_status().position
+            position = (stable_authoritative_position if phase == "sneaking"
+                        else source.get_status().position)
             source.set_input(Input(
                 position=Vec3(position.x, position.y, position.z + delta.z),
                 delta=delta,
