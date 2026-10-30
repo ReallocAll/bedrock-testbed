@@ -571,6 +571,7 @@ async def exercise(server, results):
             and re.fullmatch(r"minecraft:[a-z0-9_]+", offer.input.identifier)
             and offer.input.count < 64 and offer.output is not None
             and offer.output.identifier == "minecraft:emerald"
+            and 3 <= offer.max_uses <= 24
             and offer.uses < offer.max_uses
         ), None)
         assert quote is not None, f"No server-offered, single-ingredient trade: {results['villager']}"
@@ -696,6 +697,114 @@ async def exercise(server, results):
             f"Successful BDS trade did not advance recipe uses exactly once: {results['villager']['usage']}"
         )
         assert progressed.max_uses == quote.max_uses, "BDS changed recipe exhaustion limit"
+
+        # Continue with the same actual BDS recipe until the server says it
+        # is exhausted. Reopen after every exchange to observe authoritative
+        # uses, instead of merely counting accepted local requests.
+        cycle = []
+        while progressed.uses < progressed.max_uses:
+            before_input = bot.count_player_item(ingredient.identifier).observed_count
+            before_output = bot.count_player_item(output.identifier).observed_count
+            server.command(f"give {PLAYER} {ingredient.identifier} {amount}")
+            deadline = loop.time() + 10
+            source = None
+            while loop.time() < deadline:
+                source = next((
+                    item for item in bot.get_player_inventory()
+                    if item.identifier == ingredient.identifier and item.count >= amount
+                ), None)
+                if source is not None:
+                    break
+                await asyncio.sleep(0.1)
+            assert source is not None, "BDS did not grant another trade input stack"
+            input_slot = bot.trade_input(current_window.ref, 0)
+            assert bot.get_item(input_slot).state == SlotState.empty
+            await confirm_trade_op(
+                bot.begin_move_item(source.slot, input_slot, amount),
+                "exhaustion-cycle stage",
+            )
+            current_quote = next((
+                offer for offer in bot.get_trade_offers(current_window.ref).offers
+                if offer.ref and offer.ref.recipe_net_id == quote.ref.recipe_net_id
+            ), None)
+            assert current_quote is not None and current_quote.supported
+            destination = next((
+                item.slot for item in bot.get_player_inventory()
+                if item.slot.index >= 9 and item.state == SlotState.empty
+            ), None)
+            assert destination is not None, "No empty player slot for exhaustion trade"
+            await confirm_trade_op(
+                bot.begin_trade(current_quote.ref, destination),
+                "exhaustion-cycle trade",
+            )
+            assert bot.get_item(destination).identifier == output.identifier
+            assert bot.get_item(destination).count == output.count
+            assert bot.get_item(input_slot).count == 1
+            await confirm_trade_op(
+                bot.begin_move_item(input_slot, source.slot, 1),
+                "exhaustion-cycle return",
+            )
+            assert bot.get_item(input_slot).state == SlotState.empty
+            assert bot.count_player_item(ingredient.identifier).observed_count == (
+                before_input + amount - ingredient.count
+            ), "Exhaustion-cycle input conservation failed"
+            assert bot.count_player_item(output.identifier).observed_count == (
+                before_output + output.count
+            ), "Exhaustion-cycle output conservation failed"
+            previous_uses = current_quote.uses
+            bot.close_container(current_window.ref)
+            deadline = loop.time() + 8
+            while bot.get_trade_window() is not None and loop.time() < deadline:
+                await asyncio.sleep(0.1)
+            assert bot.get_trade_window() is None, "Exhaustion-cycle close failed"
+            bot.interact_actor(target.ref, Vec3(0, 1, 0))
+            deadline = loop.time() + 8
+            while bot.get_trade_window() is None and loop.time() < deadline:
+                await asyncio.sleep(0.1)
+            current_window = bot.get_trade_window()
+            assert current_window is not None, "BDS refused to reopen the villager"
+            deadline = loop.time() + 8
+            progressed = None
+            while loop.time() < deadline:
+                received = bot.get_trade_offers(current_window.ref)
+                progressed = next((
+                    offer for offer in received.offers
+                    if offer.ref and offer.ref.recipe_net_id == quote.ref.recipe_net_id
+                ), None) if received is not None else None
+                if progressed is not None:
+                    break
+                await asyncio.sleep(0.1)
+            assert progressed is not None, "BDS omitted the exhausted recipe"
+            assert progressed.uses == previous_uses + 1, (
+                f"Nonmonotonic server recipe uses: {previous_uses} -> {progressed.uses}"
+            )
+            assert progressed.max_uses == quote.max_uses, "Recipe limit unexpectedly changed"
+            cycle.append(progressed.uses)
+
+        # Reject exhausted trade locally, with no additional outgoing request.
+        assert len(cycle) == quote.max_uses - quote.uses - 1
+        assert progressed.uses == progressed.max_uses
+        unused_slot = next((
+            item.slot for item in bot.get_player_inventory()
+            if item.state == SlotState.empty
+        ), None)
+        assert unused_slot is not None, "No empty slot for exhausted quote refusal"
+        outgoing_before = bot.capture_statistics().packet_counts_out[147]
+        try:
+            bot.begin_trade(progressed.ref, unused_slot)
+        except RuntimeError as error:
+            assert str(error) == "trade is exhausted", f"Unexpected exhaustion refusal: {error}"
+        else:
+            raise AssertionError("Exhausted BDS trade unexpectedly admitted another request")
+        assert bot.capture_statistics().packet_counts_out[147] == outgoing_before, (
+            "Exhausted trade request unexpectedly reached the wire"
+        )
+        results["villager"]["exhaustion"] = {
+            "initial_uses": quote.uses, "maximum": quote.max_uses,
+            "observed_uses": cycle, "final_uses": progressed.uses,
+            "local_refusal": "trade is exhausted",
+        }
+        results["checks"].append("villager_recipe_exhaustion_server_confirmed")
         bot.close_container(current_window.ref)
         deadline = loop.time() + 8
         while bot.get_trade_window() is not None and loop.time() < deadline:
