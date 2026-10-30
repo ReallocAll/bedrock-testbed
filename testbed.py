@@ -571,6 +571,15 @@ async def exercise(server, results):
             raw_flags = ()
             if sent == 0:
                 raw_flags = (("START_" if enabled else "STOP_") + phase.upper(),)
+            if phase == "sneaking" and sent == 0:
+                source.send_packet(v2193.PlayerActionPacket(
+                    runtime_id=source.get_status().actor_runtime_id,
+                    action=(v2193.PlayerActionType.START_SNEAKING if enabled
+                            else v2193.PlayerActionType.STOP_SNEAKING),
+                    pos=v2193.BlockPos(x=0, y=0, z=0),
+                    result_pos=v2193.BlockPos(x=0, y=0, z=0),
+                    face=0,
+                ))
             if phase == "sneaking":
                 if enabled:
                     raw_flags += ("SNEAK_DOWN", "SNEAK_CURRENT_RAW", "WANT_DOWN")
