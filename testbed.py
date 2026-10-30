@@ -510,7 +510,6 @@ async def exercise(server, results):
             server_initiated_close=False,
         ))
         server.command("fill -2 220 -2 6 220 3 stone")
-        server.command("setblock 4 221 0 composter")
         server.command(f"tp {PLAYER} 0.5 221 0.5")
         server.command("summon villager 2.5 221 0.5 0 0 minecraft:become_farmer")
         deadline = loop.time() + 12
