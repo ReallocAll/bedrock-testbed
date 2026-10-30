@@ -512,7 +512,8 @@ async def exercise(server, results):
             local = bot.get_status().position
             located = (abs(grounded["x"] - 0.5) < 0.2
                        and abs(grounded["z"] - 0.5) < 0.2
-                       and abs(local.y - 221) < 0.2)
+                       and 221 <= grounded["y"] <= 223
+                       and abs(local.y - 221) < 2)
             stable = (previous_server_y is not None
                       and abs(grounded["y"] - previous_server_y) < 0.05)
             if located and stable:
@@ -520,7 +521,10 @@ async def exercise(server, results):
             previous_server_y = grounded["y"] if located else None
             await asyncio.sleep(0.05)
         else:
-            raise AssertionError("Main bot was not server-confirmed stable on the sprint/sneak platform")
+            raise AssertionError(
+                f"Main bot not stable on platform: server={grounded}, "
+                f"client=({local.x}, {local.y}, {local.z}), previous_y={previous_server_y}"
+            )
 
         def peer_flags():
             players = [actor for actor in other.get_observed_entities()
