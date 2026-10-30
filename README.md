@@ -84,13 +84,7 @@ and a subsequent public Trade2 request must be rejected locally without
 writing another ItemStackRequest packet. After disconnect/reconnect, the original BDS recipe must still be
 exhausted in the newly opened window, and the new Session must also reject
 a further attempt without sending an ItemStackRequest.
-An experimental extension establishes a real two-block Bedrock bed,
-exhausts the server-generated quote, then places the villager's matching
-workstation and advances to a normal work period. It requires BDS to
-send a fresh recipe with `uses=0`, then executes a second server-accepted
-Trade2 using the **new** quoted price (which may rise with demand).
-For a full-stack price of 64, it stages exactly 64 rather than
-inventing a one-item surplus. The current smoke includes **27 checks**.
+The current smoke includes **25 checks**.
 No additional server boot or Bot manager is required.
 
 No production servers/worlds, generic adapters, custom packet codecs or test

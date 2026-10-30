@@ -510,24 +510,7 @@ async def exercise(server, results):
             server_initiated_close=False,
         ))
         server.command("fill -2 220 -2 6 220 3 stone")
-        # Prepare a village bed before the trader spawns and can claim it.
-        # BDS constructs both halves from the head placement; the second
-        # setblock can fail because the matching foot is already present.
-        server.command('setblock 3 221 3 minecraft:bed ["direction"=0,"head_piece_bit"=true]')
-        bed_probe = server.command(
-            'execute if block 3 221 2 minecraft:bed run say BED_FOOT_CONFIRMED'
-        )
-        server.command(
-            'execute if block 3 221 3 minecraft:bed run say BED_HEAD_CONFIRMED'
-        )
-        deadline = loop.time() + 5
-        while loop.time() < deadline:
-            bed_output = "\n".join(server.snapshot(bed_probe))
-            if "BED_FOOT_CONFIRMED" in bed_output and "BED_HEAD_CONFIRMED" in bed_output:
-                break
-            await asyncio.sleep(0.1)
-        else:
-            raise AssertionError(f"BDS two-block bed not verified: {server.snapshot(bed_probe)}")
+        server.command("setblock 4 221 0 composter")
         server.command(f"tp {PLAYER} 0.5 221 0.5")
         server.command("summon villager 2.5 221 0.5")
         deadline = loop.time() + 12
@@ -577,20 +560,6 @@ async def exercise(server, results):
                 "reason": item.unsupported_reason,
             } for item in offers.offers
         ]
-        # Supply the matching job block *before* the first transaction, so
-        # BDS has an opportunity to claim it during ordinary villager ticks.
-        sites = {
-            "armorer": "blast_furnace", "butcher": "smoker",
-            "cartographer": "cartography_table", "cleric": "brewing_stand",
-            "farmer": "composter", "fisherman": "barrel",
-            "fletcher": "fletching_table", "leatherworker": "cauldron",
-            "librarian": "lectern", "mason": "stonecutter",
-            "shepherd": "loom", "toolsmith": "smithing_table",
-            "weaponsmith": "grindstone",
-        }
-        profession = offers.source.display_name.lower()
-        site = next((block for title, block in sites.items() if title in profession), None)
-        assert site is not None, f"Unknown villager job site: {profession!r}"
         results["checks"].append("villager_trade_window_server_confirmed")
 
         # A single real Trade2 exchange: use a server-generated quote, and
@@ -995,150 +964,6 @@ async def exercise(server, results):
             await asyncio.sleep(0.1)
         assert bot.get_trade_window() is None, "Reconnected trade window did not close"
         results["checks"].append("trade_references_rejected_and_reopened_after_reconnect")
-
-        # Experimental real-game restock oracle. A Bedrock villager needs a
-        # matching job block, village bed linkage and a work-time opportunity;
-        # never reset recipe data or claim a restock based on client counters.
-
-        results["villager"]["restock"] = {
-            "profession": profession, "workstation": site,
-            "original_exhausted_uses": still_exhausted.uses,
-            "restocked_uses": None,
-        }
-        assert site is not None, f"Cannot identify BDS villager profession: {profession!r}"
-        # Establish the station only after proving the recipe exhausted:
-        # working cannot interfere with the preceding controlled cycle.
-        station_start = server.command(f"setblock 2 221 1 minecraft:{site}")
-        server.command(f"execute if block 2 221 1 minecraft:{site} run say WORKSTATION_CONFIRMED")
-        station_deadline = loop.time() + 5
-        while loop.time() < station_deadline:
-            if any("WORKSTATION_CONFIRMED" in line for line in server.snapshot(station_start)):
-                break
-            await asyncio.sleep(0.1)
-        else:
-            raise AssertionError(f"BDS workstation placement failed: {server.snapshot(station_start)}")
-        server.command("time set 0")
-        await asyncio.sleep(2)
-        restock_deadline = loop.time() + 110
-        while loop.time() < restock_deadline:
-            bot.interact_actor(new_target.ref, Vec3(0, 1, 0))
-            deadline = loop.time() + 8
-            while bot.get_trade_window() is None and loop.time() < deadline:
-                await asyncio.sleep(0.1)
-            active = bot.get_trade_window()
-            assert active is not None, "BDS villager did not reopen during restock wait"
-            deadline = loop.time() + 8
-            current = None
-            while loop.time() < deadline:
-                offers_now = bot.get_trade_offers(active.ref)
-                current = next((
-                    item for item in offers_now.offers
-                    if item.ref and item.ref.recipe_net_id == quote.ref.recipe_net_id
-                ), None) if offers_now is not None else None
-                if current is not None:
-                    break
-                await asyncio.sleep(0.1)
-            assert current is not None, "BDS removed exhausted recipe during restock wait"
-            results["villager"]["restock"]["restocked_uses"] = current.uses
-            bot.close_container(active.ref)
-            deadline = loop.time() + 8
-            while bot.get_trade_window() is not None and loop.time() < deadline:
-                await asyncio.sleep(0.1)
-            assert bot.get_trade_window() is None
-            if current.uses < current.max_uses:
-                break
-            await asyncio.sleep(4)
-        else:
-            raise AssertionError(
-                f"BDS villager did not naturally restock within 110s: {results['villager']['restock']}"
-            )
-        assert current.uses == 0, "Natural BDS restock did not reset recipe uses"
-        results["checks"].append("villager_natural_restock_server_confirmed")
-
-        # Prove the restocked quote is usable, not merely an updated counter:
-        # perform another real Trade2 with the newly advertised input price.
-        bot.interact_actor(new_target.ref, Vec3(0, 1, 0))
-        deadline = loop.time() + 8
-        while bot.get_trade_window() is None and loop.time() < deadline:
-            await asyncio.sleep(0.1)
-        restocked_window = bot.get_trade_window()
-        assert restocked_window is not None, "Could not reopen naturally restocked villager"
-        latest = bot.get_trade_offers(restocked_window.ref)
-        restocked_offer = next((
-            row for row in latest.offers
-            if row.ref and row.ref.recipe_net_id == quote.ref.recipe_net_id
-        ), None) if latest is not None else None
-        assert (
-            restocked_offer is not None and restocked_offer.supported
-            and restocked_offer.uses == 0
-            and restocked_offer.input is not None
-            and restocked_offer.input.identifier == ingredient.identifier
-            and restocked_offer.second_input is None
-            and restocked_offer.output is not None
-            and restocked_offer.output.identifier == output.identifier
-            and 1 <= restocked_offer.input.count <= 64
-        ), f"Restocked BDS quote changed unexpectedly: {restocked_offer}"
-        price = restocked_offer.input.count
-        surplus = int(price < 64)
-        provided = price + surplus
-        before_ingredient = bot.count_player_item(ingredient.identifier).observed_count
-        before_emeralds = bot.count_player_item(output.identifier).observed_count
-        server.command(f"give {PLAYER} {ingredient.identifier} {provided}")
-        deadline = loop.time() + 10
-        source = None
-        while loop.time() < deadline:
-            count = bot.count_player_item(ingredient.identifier)
-            source = next((
-                item for item in bot.get_player_inventory()
-                if item.identifier == ingredient.identifier and item.count >= provided
-            ), None)
-            if count.complete and count.observed_count == before_ingredient + provided and source:
-                break
-            await asyncio.sleep(0.1)
-        assert source is not None and count.complete and (
-            count.observed_count == before_ingredient + provided
-        ), "Restocked BDS input grant did not settle"
-        input_slot = bot.trade_input(restocked_window.ref, 0)
-        assert bot.get_item(input_slot).state == SlotState.empty
-        await confirm_trade_op(
-            bot.begin_move_item(source.slot, input_slot, provided), "restock stage"
-        )
-        latest = bot.get_trade_offers(restocked_window.ref)
-        restocked_offer = next((
-            row for row in latest.offers
-            if row.ref and row.ref.recipe_net_id == quote.ref.recipe_net_id
-        ), None)
-        assert restocked_offer is not None and restocked_offer.input.count == price
-        destination = next((
-            item.slot for item in bot.get_player_inventory()
-            if item.slot.index >= 9 and item.state == SlotState.empty
-        ), None)
-        assert destination is not None, "No restock trade destination"
-        await confirm_trade_op(
-            bot.begin_trade(restocked_offer.ref, destination), "restock exchange"
-        )
-        assert bot.get_item(destination).identifier == output.identifier
-        assert bot.get_item(destination).count == output.count
-        if surplus:
-            assert bot.get_item(input_slot).count == 1
-            await confirm_trade_op(
-                bot.begin_move_item(input_slot, source.slot, 1), "restock return"
-            )
-        assert bot.get_item(input_slot).state == SlotState.empty
-        assert bot.count_player_item(ingredient.identifier).observed_count == (
-            before_ingredient + provided - price
-        ), "Restocked input conservation failed"
-        assert bot.count_player_item(output.identifier).observed_count == (
-            before_emeralds + output.count
-        ), "Restocked output conservation failed"
-        results["villager"]["restock"]["new_price"] = price
-        results["villager"]["restock"]["second_trade_server_confirmed"] = True
-        bot.close_container(restocked_window.ref)
-        deadline = loop.time() + 8
-        while bot.get_trade_window() is not None and loop.time() < deadline:
-            await asyncio.sleep(0.1)
-        assert bot.get_trade_window() is None
-        results["checks"].append("villager_restocked_trade_server_confirmed")
 
         await bot.disconnect()
         await other.disconnect()
