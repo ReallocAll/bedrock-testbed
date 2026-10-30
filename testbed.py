@@ -501,7 +501,7 @@ async def exercise(server, results):
         }
         results["checks"].append("item_move_transaction_server_confirmed")
 
-        # Villager integration: BDS owns the farmer, generated offers and
+        # Villager integration: BDS owns the trader, generated offers and
         # trade window. Only use the Bot's public entity/window APIs.
         screen = opened_inventories[-1]
         bot.send_packet(v2193.ContainerClosePacket(
@@ -512,7 +512,7 @@ async def exercise(server, results):
         server.command("fill -2 220 -2 6 220 3 stone")
         server.command("setblock 4 221 0 composter")
         server.command(f"tp {PLAYER} 0.5 221 0.5")
-        server.command("summon villager 2.5 221 0.5 0 0 minecraft:spawn_farmer")
+        server.command("summon villager 2.5 221 0.5")
         deadline = loop.time() + 12
         target = None
         while loop.time() < deadline:
@@ -528,7 +528,7 @@ async def exercise(server, results):
                 target = villagers[0]
                 break
             await asyncio.sleep(0.1)
-        assert target is not None, f"BDS farmer was not visible: {bot.get_observed_entities()}"
+        assert target is not None, f"BDS villager was not visible: {bot.get_observed_entities()}"
         results["villager"] = {
             "type": target.type, "unique_id": target.ref.unique_id,
             "runtime_id": target.ref.runtime_id,
@@ -544,13 +544,13 @@ async def exercise(server, results):
         while bot.get_trade_window() is None and loop.time() < deadline:
             await asyncio.sleep(0.1)
         window = bot.get_trade_window()
-        assert window is not None, "BDS farmer did not open a trade window"
+        assert window is not None, "BDS villager did not open a trade window"
         deadline = loop.time() + 8
         offers = bot.get_trade_offers(window.ref)
         while (offers is None or not offers.offers) and loop.time() < deadline:
             await asyncio.sleep(0.1)
             offers = bot.get_trade_offers(window.ref)
-        assert offers is not None and offers.offers, "BDS farmer gave no trade offers"
+        assert offers is not None and offers.offers, "BDS villager gave no trade offers"
         results["villager"]["offers"] = [
             {
                 "supported": item.supported,
@@ -639,11 +639,31 @@ async def exercise(server, results):
             "stage_status": stage_status, "trade_status": trade_status,
             "return_status": return_status,
         }
-        bot.close_container(window.ref)
-        deadline = loop.time() + 8
-        while bot.get_trade_window() is not None and loop.time() < deadline:
-            await asyncio.sleep(0.1)
-        assert bot.get_trade_window() is None, "BDS trade window was not closed"
+        closed_windows = []
+
+        def observe_trade_close(source, event):
+            if (
+                source is bot and isinstance(event, PacketDecodedEvent)
+                and event.packet.header.packet_id == 47
+                and int(event.packet.payload.container_id) == window.ref.window_id
+            ):
+                closed_windows.append(event.packet.payload)
+
+        stop_close_observer = runtime.subscribe(
+            observe_trade_close, events=event_mask(EventKind.packet_decoded)
+        )
+        try:
+            bot.close_container(window.ref)
+            deadline = loop.time() + 8
+            while (
+                bot.get_trade_window() is not None or not closed_windows
+            ) and loop.time() < deadline:
+                await asyncio.sleep(0.1)
+            assert bot.get_trade_window() is None and closed_windows, (
+                "BDS did not acknowledge trade window closure"
+            )
+        finally:
+            stop_close_observer()
         results["checks"].append("villager_trade_exchange_server_confirmed")
 
         # Two real RakNet players sharing one Runtime: closing one Session must
