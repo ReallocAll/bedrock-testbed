@@ -613,11 +613,21 @@ async def exercise(server, results):
                 nonlocal sent
                 if source is not bot or not isinstance(event, TickEvent) or sent >= frames:
                     return
+                raw_flags = ()
+                if name == "sneaking":
+                    if enabled:
+                        raw_flags = ("SNEAK_CURRENT_RAW",)
+                        if sent == 0:
+                            raw_flags += ("START_SNEAKING", "SNEAK_DOWN", "SNEAK_PRESSED_RAW")
+                    elif sent == 0:
+                        raw_flags = ("STOP_SNEAKING", "SNEAK_RELEASED_RAW")
+                elif sent == 0:
+                    raw_flags = (("START_" if enabled else "STOP_") + name.upper(),)
                 source.set_input(Input(
                     position=source.get_status().position,
                     sneaking=enabled if name == "sneaking" else False,
                     sprinting=enabled if name == "sprinting" else False,
-                    flags=(("START_" if enabled else "STOP_") + name.upper(),) if sent == 0 else (),
+                    flags=raw_flags,
                 ))
                 sent += 1
 
