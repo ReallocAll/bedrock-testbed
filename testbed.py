@@ -205,7 +205,10 @@ def configure(path):
 
 async def exercise(server, results):
     from bedrock_protocol import v2193
-    from endpilot import BotOptions, BotState, EventKind, Input, PacketDecodedEvent, Runtime, TickEvent, Vec2, Vec3, event_mask
+    from endpilot import (
+        BotOptions, BotState, EventKind, Input, ItemRequestOutcome, PacketDecodedEvent,
+        Runtime, SlotState, TickEvent, Vec2, Vec3, event_mask,
+    )
 
     radius_events = []
     observer_radii = []
@@ -418,6 +421,57 @@ async def exercise(server, results):
         }
         assert jump_rise > 0.25, f"BDS did not confirm vertical jump: {results['jump']}"
         results["checks"].append("input_jump_server_confirmed")
+
+        # Real inventory: let BDS grant the item, then request one native
+        # server-side inventory transfer using only the public Bot API.
+        server.command(f"gamemode survival {PLAYER}")
+        item_id = "minecraft:emerald"
+        deadline = loop.time() + 10
+        initial_items = bot.count_player_item(item_id)
+        while not initial_items.complete and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+            initial_items = bot.count_player_item(item_id)
+        assert initial_items.complete and initial_items.observed_count == 0, (
+            f"Fresh BDS inventory is not fully known and empty: {initial_items}"
+        )
+        server.command(f"give {PLAYER} emerald 4")
+        deadline = loop.time() + 10
+        granted = bot.count_player_item(item_id)
+        while loop.time() < deadline and (
+            not granted.complete or granted.observed_count != 4
+        ):
+            await asyncio.sleep(0.1)
+            granted = bot.count_player_item(item_id)
+        assert granted.complete and granted.observed_count == 4, (
+            f"BDS item grant was not observed via Item Registry: {granted}"
+        )
+        results["checks"].append("item_registry_inventory_server_confirmed")
+
+        slots = bot.get_player_inventory()
+        source = next(
+            (slot for slot in slots if slot.identifier == item_id and slot.count == 4), None
+        )
+        target = next(
+            (slot for slot in slots if slot.state == SlotState.empty and slot.slot.index >= 9), None
+        )
+        assert source is not None and target is not None, "No known item source and empty destination"
+        operation = bot.begin_move_item(source.slot, target.slot, 1)
+        settled = await operation.wait(12)
+        assert settled.outcome == ItemRequestOutcome.completed and settled.server_result == 0, (
+            f"BDS rejected inventory move: {settled}"
+        )
+        moved = bot.get_item(target.slot)
+        remaining = bot.get_item(source.slot)
+        assert (
+            moved.identifier == item_id and moved.count == 1
+            and remaining.identifier == item_id and remaining.count == 3
+            and bot.count_player_item(item_id).observed_count == 4
+        ), f"Server-authoritative inventory transfer did not conserve items: {remaining} -> {moved}"
+        results["inventory"] = {
+            "item": item_id, "granted": 4, "moved": 1,
+            "server_result": int(settled.server_result),
+        }
+        results["checks"].append("item_move_transaction_server_confirmed")
 
         # Two real RakNet players sharing one Runtime: closing one Session must
         # not cancel the other Bot or corrupt its inbound packet state.
