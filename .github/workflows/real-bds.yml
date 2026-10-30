@@ -42,7 +42,7 @@ jobs:
         with:
           name: python-pure
           repository: ReallocAll/bedrock-protocol
-          run-id: 40091787005
+          run-id: 41009758882
           github-token: ${{ secrets.REPO_DEVELOP }}
           path: dependencies/pure
       - name: Get pinned Linux native protocol wheel
@@ -50,7 +50,7 @@ jobs:
         with:
           name: python-native-Linux
           repository: ReallocAll/bedrock-protocol
-          run-id: 40091787005
+          run-id: 41009758882
           github-token: ${{ secrets.REPO_DEVELOP }}
           path: dependencies/native
       - uses: actions/setup-python@v6
