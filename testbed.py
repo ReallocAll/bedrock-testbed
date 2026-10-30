@@ -501,6 +501,67 @@ async def exercise(server, results):
         }
         results["checks"].append("item_move_transaction_server_confirmed")
 
+        # Villager integration: BDS owns the farmer, generated offers and
+        # trade window. Only use the Bot's public entity/window APIs.
+        screen = opened_inventories[-1]
+        bot.send_packet(v2193.ContainerClosePacket(
+            container_id=screen.container_id,
+            container_type=screen.type,
+            server_initiated_close=False,
+        ))
+        server.command("fill -2 220 -2 6 220 3 stone")
+        server.command("setblock 4 221 0 composter")
+        server.command(f"tp {PLAYER} 0.5 221 0.5")
+        server.command("summon villager 2.5 221 0.5 0 0 minecraft:spawn_farmer")
+        deadline = loop.time() + 12
+        target = None
+        while loop.time() < deadline:
+            villagers = [
+                actor for actor in bot.get_observed_entities()
+                if actor.type in ("minecraft:villager", "minecraft:villager_v2")
+                and math.dist(
+                    (actor.position.x, actor.position.y, actor.position.z),
+                    (2.5, 221, 0.5),
+                ) < 5
+            ]
+            if len(villagers) == 1 and abs(bot.get_status().position.y - 221) < 3:
+                target = villagers[0]
+                break
+            await asyncio.sleep(0.1)
+        assert target is not None, f"BDS farmer was not visible: {bot.get_observed_entities()}"
+        results["villager"] = {
+            "type": target.type, "unique_id": target.ref.unique_id,
+            "runtime_id": target.ref.runtime_id,
+        }
+        current = bot.get_status()
+        dx = target.position.x - current.position.x
+        dy = target.position.y + 1 - current.position.y
+        dz = target.position.z - current.position.z
+        bot.set_look(-math.degrees(math.atan2(dy, math.hypot(dx, dz))), math.degrees(math.atan2(-dx, dz)))
+        await asyncio.sleep(0.3)
+        bot.interact_actor(target.ref, Vec3(0, 1, 0))
+        deadline = loop.time() + 8
+        while bot.get_trade_window() is None and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        window = bot.get_trade_window()
+        assert window is not None, "BDS farmer did not open a trade window"
+        deadline = loop.time() + 8
+        offers = bot.get_trade_offers(window.ref)
+        while (offers is None or not offers.offers) and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+            offers = bot.get_trade_offers(window.ref)
+        assert offers is not None and offers.offers, "BDS farmer gave no trade offers"
+        results["villager"]["offers"] = [
+            {
+                "supported": item.supported,
+                "input": None if item.input is None else item.input.identifier,
+                "input_count": None if item.input is None else item.input.count,
+                "output": None if item.output is None else item.output.identifier,
+                "reason": item.unsupported_reason,
+            } for item in offers.offers
+        ]
+        results["checks"].append("villager_trade_window_server_confirmed")
+
         # Two real RakNet players sharing one Runtime: closing one Session must
         # not cancel the other Bot or corrupt its inbound packet state.
         async def expect_players(count, *names):
