@@ -57,7 +57,8 @@ not a count of submitted input frames or the client's predicted position.
 The same Runtime also connects two named Bots to BDS, verifies server-side
 player counts (2 → 1 → 2 → 0), checks that the surviving Bot still receives a
 packet response after its peer disconnects, and reconnects the original Bot
-after input execution. The high-altitude movement test confirms active
+after input execution. After reconnect, old trade/entity/offer references
+must fail while a new Session can reopen the same server villager. The high-altitude movement test confirms active
 server gravity before asserting horizontal displacement. A stable
 server-built platform enables the authoritative jump-height check.
 
@@ -74,7 +75,7 @@ single-ingredient, currently available trade that sells an emerald, grants
 the quoted input through BDS, stages one surplus item, executes the Trade2
 request, returns the residual and verifies item conservation. Each request
 must receive the successful server response, and BDS must acknowledge the
-container close. The current smoke includes **21 checks**.
+container close. The current smoke includes **22 checks**.
 No additional server boot or Bot manager is required.
 
 No production servers/worlds, generic adapters, custom packet codecs or test
