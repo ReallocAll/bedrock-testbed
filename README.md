@@ -54,6 +54,10 @@ The input extension scenario teleports into the fresh test world, submits
 34 frames through a standalone event subscriber, and compares BDS `querytarget`
 coordinates before and after movement. This is a server-authoritative oracle,
 not a count of submitted input frames or the client's predicted position.
+The same Runtime also connects two named Bots to BDS, verifies server-side
+player counts (2 → 1 → 2 → 0), checks that the surviving Bot still receives a
+packet response after its peer disconnects, and reconnects the original Bot
+after input execution. No additional server boot or Bot manager is required.
 
 No production servers/worlds, generic adapters, custom packet codecs or test
 controllers are involved. The server world and process are never cached.
