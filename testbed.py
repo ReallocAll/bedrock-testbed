@@ -526,6 +526,73 @@ async def exercise(server, results):
         results["two_bot_list"] = await expect_players(2, PLAYER, other_name)
         results["checks"].append("two_bots_online_server_confirmed")
 
+        # A second real BDS client observes the first player's authoritative
+        # actor metadata. Input flags alone would not prove sneak/sprint state.
+        server.command("setblock 2 220 0 stone")
+        server.command(f"tp {other_name} 2.5 221 0.5")
+
+        def peer_flags():
+            players = [actor for actor in other.get_observed_entities()
+                       if actor.type == "minecraft:player"]
+            if len(players) != 1:
+                return None
+            actor = other.capture_actor(players[0].ref.runtime_id)
+            if actor is None or actor.metadata is None:
+                return None
+            entries = [entry for entry in actor.metadata.entries if entry.id == 0]
+            return int(entries[0].value) if len(entries) == 1 else None
+
+        deadline = loop.time() + 12
+        baseline_flags = peer_flags()
+        while baseline_flags is None and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+            baseline_flags = peer_flags()
+        assert baseline_flags is not None, "Second Bot never observed first player's BDS flags"
+        results["peer_initial_flags"] = baseline_flags
+
+        async def toggle_and_observe(name, flag, enabled, frames=15):
+            sent = 0
+
+            def send_state(source, event):
+                nonlocal sent
+                if source is not bot or not isinstance(event, TickEvent) or sent >= frames:
+                    return
+                source.set_input(Input(
+                    position=source.get_status().position,
+                    sneaking=enabled if name == "sneaking" else False,
+                    sprinting=enabled if name == "sprinting" else False,
+                    flags=(("START_" if enabled else "STOP_") + name.upper(),) if sent == 0 else (),
+                ))
+                sent += 1
+
+            unsubscribe = runtime.subscribe(send_state, events=event_mask(EventKind.tick))
+            try:
+                deadline = loop.time() + 6
+                while sent < frames and loop.time() < deadline:
+                    await asyncio.sleep(0.05)
+                assert sent == frames, f"Only sent {sent} {name} input ticks"
+                deadline = loop.time() + 5
+                flags = peer_flags()
+                while (flags is None or bool(flags & (1 << flag)) != enabled) and loop.time() < deadline:
+                    await asyncio.sleep(0.1)
+                    flags = peer_flags()
+                assert flags is not None and bool(flags & (1 << flag)) == enabled, (
+                    f"BDS did not synchronize {name}={enabled} to peer: flags={flags}"
+                )
+                return flags
+            finally:
+                unsubscribe()
+
+        sneak_on = await toggle_and_observe("sneaking", 1, True)
+        sneak_off = await toggle_and_observe("sneaking", 1, False)
+        sprint_on = await toggle_and_observe("sprinting", 3, True)
+        sprint_off = await toggle_and_observe("sprinting", 3, False)
+        results["peer_movement_flags"] = {
+            "sneak_on": sneak_on, "sneak_off": sneak_off,
+            "sprint_on": sprint_on, "sprint_off": sprint_off,
+        }
+        results["checks"].append("sneak_sprint_peer_server_confirmed")
+
         await bot.disconnect()
         results["single_survivor_list"] = await expect_players(1, other_name)
         assert other.get_status().state == BotState.ready, "Peer disconnect stopped the surviving Bot"
