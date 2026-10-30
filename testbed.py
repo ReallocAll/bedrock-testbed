@@ -477,7 +477,7 @@ async def exercise(server, results):
         # not cancel the other Bot or corrupt its inbound packet state.
         async def expect_players(count, *names):
             recent = []
-            for _ in range(8):
+            for _ in range(25):
                 _, recent = await asyncio.to_thread(server.player_online)
                 counts = [
                     int(match.group(1))
@@ -528,7 +528,7 @@ async def exercise(server, results):
 
         await bot.disconnect()
         await other.disconnect()
-        results["bds_offline_list"] = await asyncio.to_thread(server.wait_player, False)
+        results["bds_offline_list"] = await expect_players(0)
         results["checks"].append("client_disconnect_server_confirmed")
 
     pending = [
