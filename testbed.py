@@ -603,10 +603,10 @@ async def exercise(server, results):
         observed = []
         try:
             for phase_name, bit, target in (
-                ("sneaking", 1, True),
-                ("sneaking", 1, False),
                 ("sprinting", 3, True),
                 ("sprinting", 3, False),
+                ("sneaking", 1, True),
+                ("sneaking", 1, False),
             ):
                 phase, enabled, sent = phase_name, target, 0
                 previous = len(peer_updates)
