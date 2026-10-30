@@ -702,21 +702,34 @@ async def exercise(server, results):
         # is exhausted. Reopen after every exchange to observe authoritative
         # uses, instead of merely counting accepted local requests.
         cycle = []
+        results["villager"]["exhaustion"] = {"observed_uses": cycle}
         while progressed.uses < progressed.max_uses:
             before_input = bot.count_player_item(ingredient.identifier).observed_count
             before_output = bot.count_player_item(output.identifier).observed_count
             server.command(f"give {PLAYER} {ingredient.identifier} {amount}")
             deadline = loop.time() + 10
             source = None
+            granted = None
             while loop.time() < deadline:
+                granted = bot.count_player_item(ingredient.identifier)
                 source = next((
                     item for item in bot.get_player_inventory()
                     if item.identifier == ingredient.identifier and item.count >= amount
                 ), None)
-                if source is not None:
+                if (
+                    granted.complete and granted.observed_count == before_input + amount
+                    and source is not None
+                ):
                     break
                 await asyncio.sleep(0.1)
-            assert source is not None, "BDS did not grant another trade input stack"
+            assert source is not None and granted is not None and granted.complete and (
+                granted.observed_count == before_input + amount
+            ), f"BDS grant did not fully settle before the next request: {granted}"
+            results["villager"]["exhaustion"]["last_stage"] = {
+                "uses": progressed.uses, "source_slot": source.slot.index,
+                "source_count": source.count, "source_stack_id": source.stack_id,
+                "observed_ingredient_total": granted.observed_count,
+            }
             input_slot = bot.trade_input(current_window.ref, 0)
             assert bot.get_item(input_slot).state == SlotState.empty
             await confirm_trade_op(
