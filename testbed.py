@@ -1076,10 +1076,11 @@ async def exercise(server, results):
             and restocked_offer.second_input is None
             and restocked_offer.output is not None
             and restocked_offer.output.identifier == output.identifier
-            and 1 <= restocked_offer.input.count < 64
+            and 1 <= restocked_offer.input.count <= 64
         ), f"Restocked BDS quote changed unexpectedly: {restocked_offer}"
         price = restocked_offer.input.count
-        provided = price + 1
+        surplus = int(price < 64)
+        provided = price + surplus
         before_ingredient = bot.count_player_item(ingredient.identifier).observed_count
         before_emeralds = bot.count_player_item(output.identifier).observed_count
         server.command(f"give {PLAYER} {ingredient.identifier} {provided}")
@@ -1118,10 +1119,11 @@ async def exercise(server, results):
         )
         assert bot.get_item(destination).identifier == output.identifier
         assert bot.get_item(destination).count == output.count
-        assert bot.get_item(input_slot).count == 1
-        await confirm_trade_op(
-            bot.begin_move_item(input_slot, source.slot, 1), "restock return"
-        )
+        if surplus:
+            assert bot.get_item(input_slot).count == 1
+            await confirm_trade_op(
+                bot.begin_move_item(input_slot, source.slot, 1), "restock return"
+            )
         assert bot.get_item(input_slot).state == SlotState.empty
         assert bot.count_player_item(ingredient.identifier).observed_count == (
             before_ingredient + provided - price
