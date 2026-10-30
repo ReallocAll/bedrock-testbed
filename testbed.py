@@ -293,11 +293,11 @@ async def exercise(server, results):
 
         # A separate, server-authoritative oracle: BDS querytarget reports the
         # entity's actual coordinates, unlike the client's predicted position.
-        server.command(f"tp {PLAYER} 0.5 101 0.5")
+        server.command(f"tp {PLAYER} 0.5 240 0.5")
         deadline = loop.time() + 12
-        while loop.time() < deadline and bot.get_status().position.y > 128:
+        while loop.time() < deadline and bot.get_status().position.y > 255:
             await asyncio.sleep(0.1)
-        if bot.get_status().position.y > 128:
+        if bot.get_status().position.y > 255:
             raise AssertionError("Client never observed BDS teleport")
 
         async def authoritative_position():
@@ -326,6 +326,19 @@ async def exercise(server, results):
         results["start_server_position"] = origin
         assert abs(origin["x"] - 0.5) < 1, f"BDS did not teleport to the initial x: {origin}"
         results["checks"].append("server_position_origin_confirmed")
+
+        # Newly generated worlds may not simulate the target chunk immediately.
+        # Prove that server player physics advances before measuring inputs.
+        physics_deadline = loop.time() + 12
+        while loop.time() < physics_deadline:
+            falling = await authoritative_position()
+            if falling["y"] < origin["y"] - 0.25:
+                origin = falling
+                break
+            await asyncio.sleep(0.2)
+        else:
+            raise AssertionError("BDS player physics did not advance after teleport; movement oracle unavailable")
+        results["start_server_position"] = origin
 
         # Independent third-party behavior using only public event and input APIs.
         submitted = 0
