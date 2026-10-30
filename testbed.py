@@ -452,7 +452,7 @@ async def exercise(server, results):
             (slot for slot in slots if slot.identifier == item_id and slot.count == 4), None
         )
         target = next(
-            (slot for slot in slots if slot.state == SlotState.empty and slot.slot.index < 9), None
+            (slot for slot in slots if slot.state == SlotState.empty and slot.slot.index >= 9), None
         )
         assert source is not None and target is not None, "No known item source and empty destination"
         operation = bot.begin_move_item(source.slot, target.slot, 1)
