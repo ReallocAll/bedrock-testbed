@@ -21,7 +21,12 @@ concurrency:
 jobs:
   endpilot:
     if: github.actor == 'ReallocAll'
+    name: EndPilot (${{ matrix.transport }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [raknet, nethernet]
     timeout-minutes: 30
     env:
       ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || 'f0f9e9a57d1cca142ad5779fa9a3fbccbfbe7ae1' }}
@@ -69,12 +74,12 @@ jobs:
           .venv-client/bin/python -m pip check
           .venv-client/bin/python -m pip show endpilot bedrock-protocol-native
       - name: Exercise public Typed Packet API against fresh real BDS
-        run: .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT"
+        run: .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
       - name: Save evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-bds-endpilot
+          name: real-bds-endpilot-${{ matrix.transport }}
           path: |
             work/result.json
             work/bds.log
