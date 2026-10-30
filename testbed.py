@@ -528,6 +528,9 @@ async def exercise(server, results):
             await asyncio.sleep(0.1)
         else:
             raise AssertionError(f"BDS two-block bed not verified: {server.snapshot(bed_probe)}")
+        # A linked bed lets a villager sleep; keep its first trade in
+        # daytime before giving it a job site later for natural restocking.
+        server.command("time set 0")
         server.command(f"tp {PLAYER} 0.5 221 0.5")
         server.command("summon villager 2.5 221 0.5")
         deadline = loop.time() + 12
@@ -556,12 +559,15 @@ async def exercise(server, results):
         dz = target.position.z - current.position.z
         bot.set_look(-math.degrees(math.atan2(dy, math.hypot(dx, dz))), math.degrees(math.atan2(-dx, dz)))
         await asyncio.sleep(0.3)
-        bot.interact_actor(target.ref, Vec3(0, 1, 0))
         deadline = loop.time() + 8
         while bot.get_trade_window() is None and loop.time() < deadline:
-            await asyncio.sleep(0.1)
+            # The freshly spawned villager may not respond on its first tick.
+            bot.interact_actor(target.ref, Vec3(0, 1, 0))
+            await asyncio.sleep(0.5)
         window = bot.get_trade_window()
-        assert window is not None, "BDS villager did not open a trade window"
+        assert window is not None, (
+            f"BDS villager did not open a trade window at daytime: {target.type}"
+        )
         deadline = loop.time() + 8
         offers = bot.get_trade_offers(window.ref)
         while (offers is None or not offers.offers) and loop.time() < deadline:
