@@ -75,7 +75,9 @@ single-ingredient, currently available trade that sells an emerald, grants
 the quoted input through BDS, stages one surplus item, executes the Trade2
 request, returns the residual and verifies item conservation. Each request
 must receive the successful server response, and BDS must acknowledge the
-container close. The current smoke includes **22 checks**.
+container close. After the completed exchange the Bot reopens the villager window and
+checks that a fresh BDS quote advances the recipe use counter exactly once,
+without changing the maximum. The current smoke includes **23 checks**.
 No additional server boot or Bot manager is required.
 
 No production servers/worlds, generic adapters, custom packet codecs or test
