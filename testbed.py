@@ -1129,6 +1129,141 @@ async def exercise(server, results, transport):
             unsubscribe_input()
             unsubscribe_metadata()
 
+
+        # Exercise PR #8's actual application-owned behavior composition against BDS.
+        # The second player remains the server-authoritative posture observer.
+        from importlib import util
+        module_path = ROOT / "pr-source/examples/behavior_composition.py"
+        spec = util.spec_from_file_location("behavior_pr8", module_path)
+        assert spec is not None and spec.loader is not None
+        example = util.module_from_spec(spec)
+        spec.loader.exec_module(example)
+
+        navigation, avoidance, posture = example.Navigation(), example.ActorAvoidance(), example.Posture()
+        recorded = []
+        original_set_input = bot.set_input
+
+        def record_input(frame):
+            recorded.append(frame)
+            original_set_input(frame)
+
+        async def wait_for_behavior(predicate, description, timeout=8):
+            deadline = loop.time() + timeout
+            while loop.time() < deadline:
+                if predicate():
+                    return
+                await asyncio.sleep(0.05)
+            raise AssertionError(f"Behavior did not reach {description}; recent={recorded[-3:]}")
+
+        async def wait_peer_flag(bit, enabled, start):
+            await wait_for_behavior(
+                lambda: peer_flags() is not None
+                and bool(peer_flags() & (1 << bit)) == enabled
+                and any(bool(value & (1 << bit)) == enabled for value in peer_updates[start:]),
+                f"BDS peer posture bit {bit}={enabled}",
+            )
+
+        bot.set_input = record_input
+        unsubscribe_metadata = runtime.subscribe(
+            record_peer_flags, events=event_mask(EventKind.packet_decoded)
+        )
+        unsubscribe_behaviors = example.subscribe_behaviors(
+            runtime, bot, navigation, avoidance, posture
+        )
+        behavior_observations = {}
+        try:
+            server.command(f"tp {PLAYER} 0.5 221 0.5")
+            server.command(f"tp {other_name} 5.5 221 0.5")
+            await wait_for_behavior(
+                lambda: abs(bot.get_status().position.x - 0.5) < 0.5
+                and any(actor.type == "minecraft:player" for actor in bot.get_observed_entities()),
+                "initial teleport and nearby player visibility",
+            )
+            start = len(recorded)
+            navigation.start()
+            avoidance.start()
+            posture.start("sprint")
+            updates = len(peer_updates)
+            await wait_for_behavior(
+                lambda: any(f.move.y == 1 and f.sprinting for f in recorded[start:]),
+                "composed forward+sprint input",
+            )
+            await wait_peer_flag(3, True, updates)
+            behavior_observations["sprint_server"] = True
+
+            server.command(f"tp {PLAYER} 0.5 221 0.5")
+            server.command(f"tp {other_name} 1.5 221 0.5")
+            await wait_for_behavior(lambda: avoidance.blocked(bot), "actor avoidance proximity")
+            start = len(recorded)
+            await wait_for_behavior(
+                lambda: any(f.move.y == 0 and f.jumping and not f.sprinting
+                            for f in recorded[start:]),
+                "blocked navigation with independent jump",
+            )
+            behavior_observations["avoidance_input"] = True
+
+            updates = len(peer_updates)
+            posture.start("sneak")
+            avoidance.stop()
+            start = len(recorded)
+            await wait_for_behavior(
+                lambda: any(f.move.y == 1 and f.sneaking and not f.sprinting
+                            for f in recorded[start:]),
+                "navigation and sneak after avoidance stop",
+            )
+            await wait_peer_flag(1, True, updates)
+            behavior_observations["sneak_server"] = True
+
+            updates = len(peer_updates)
+            navigation.stop()
+            posture.stop()
+            start = len(recorded)
+            await wait_for_behavior(
+                lambda: any(f.move.y == 0 and not f.jumping
+                            and not f.sneaking and not f.sprinting
+                            for f in recorded[start:]),
+                "idle frame after behavior stop",
+            )
+            await wait_peer_flag(1, False, updates)
+            behavior_observations["idle_server"] = True
+
+            navigation.start()
+            posture.start("sprint")
+            old_session = bot.get_status().session_id
+            await bot.reconnect()
+            await bot.wait_ready(65)
+            assert bot.get_status().session_id != old_session
+            assert not navigation.enabled and not avoidance.enabled and posture.mode is None
+            original_id = bot.get_status().actor_runtime_id
+            start = len(recorded)
+            await wait_for_behavior(
+                lambda: any(f.move.y == 0 and not f.jumping
+                            and not f.sneaking and not f.sprinting
+                            for f in recorded[start:]),
+                "idle frame in new Session",
+            )
+            behavior_observations["reconnect_reset"] = True
+            updates = len(peer_updates)
+            posture.start("sneak")
+            await wait_for_behavior(
+                lambda: any(f.sneaking for f in recorded[start:]),
+                "new Session behavior reactivation",
+            )
+            await wait_peer_flag(1, True, updates)
+            updates = len(peer_updates)
+            posture.stop()
+            await wait_peer_flag(1, False, updates)
+            behavior_observations["new_session_server"] = True
+            results["behavior_composition"] = behavior_observations
+            results["checks"].append("behavior_composition_bds_confirmed")
+        finally:
+            navigation.stop()
+            avoidance.stop()
+            posture.stop()
+            unsubscribe_behaviors()
+            unsubscribe_metadata()
+            bot.set_input = original_set_input
+
         await bot.disconnect()
         await other.disconnect()
         results["bds_offline_list"] = await expect_players(0)
