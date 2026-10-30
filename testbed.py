@@ -374,54 +374,15 @@ async def exercise(server, results):
         assert displacement >= 0.5, f"BDS did not accept significant horizontal movement: {origin} -> {destination}"
         results["checks"].append("input_movement_server_confirmed")
 
-        # Exercise the public jump input against a stable server-side platform.
-        # Player coordinates are sampled from BDS, never from local prediction.
+        # Keep the existing inventory checks grounded while the jump check
+        # runs after the focused Sneak/Sprint experiment on this draft branch.
         server.command("setblock 0 220 0 stone")
         server.command(f"tp {PLAYER} 0.5 221 0.5")
         deadline = loop.time() + 12
         while loop.time() < deadline and abs(bot.get_status().position.y - 221) > 2:
             await asyncio.sleep(0.1)
         if abs(bot.get_status().position.y - 221) > 2:
-            raise AssertionError("Jump setup teleport was not observed")
-
-        await asyncio.sleep(0.4)
-        ground = await authoritative_position()
-        await asyncio.sleep(0.3)
-        stable = await authoritative_position()
-        assert abs(stable["y"] - ground["y"]) < 0.1, (
-            f"No stable BDS platform for jump test: {ground} -> {stable}"
-        )
-        jump_sent = 0
-
-        def jump(source, event):
-            nonlocal jump_sent
-            if source is not bot or not isinstance(event, TickEvent) or jump_sent >= 14:
-                return
-            position = source.get_status().position
-            source.set_input(Input(
-                position=position, jumping=True,
-                flags=("JUMP_DOWN", "JUMP_CURRENT_RAW", "START_JUMPING", "JUMP_PRESSED_RAW")
-                if jump_sent == 0 else ("JUMP_DOWN", "JUMP_CURRENT_RAW"),
-            ))
-            jump_sent += 1
-
-        stop_jumping = runtime.subscribe(jump, events=event_mask(EventKind.tick))
-        jump_heights = []
-        try:
-            deadline = loop.time() + 3
-            while loop.time() < deadline and jump_sent < 14:
-                jump_heights.append((await authoritative_position())["y"])
-                await asyncio.sleep(0.04)
-        finally:
-            stop_jumping()
-        assert jump_sent == 14, f"Only sent {jump_sent} of 14 jump frames"
-        jump_rise = max(jump_heights, default=stable["y"]) - stable["y"]
-        results["jump"] = {
-            "ground": stable["y"], "sampled_heights": jump_heights,
-            "rise": jump_rise, "frames": jump_sent,
-        }
-        assert jump_rise > 0.25, f"BDS did not confirm vertical jump: {results['jump']}"
-        results["checks"].append("input_jump_server_confirmed")
+            raise AssertionError("Inventory setup teleport was not observed")
 
         # Real inventory: let BDS grant the item, then request one native
         # server-side inventory transfer using only the public Bot API.
@@ -659,6 +620,55 @@ async def exercise(server, results):
             phase = None
             unsubscribe_input()
             unsubscribe_metadata()
+
+        # Exercise the public jump input against a stable server-side platform.
+        # Player coordinates are sampled from BDS, never from local prediction.
+        server.command("setblock 0 220 0 stone")
+        server.command(f"tp {PLAYER} 0.5 221 0.5")
+        deadline = loop.time() + 12
+        while loop.time() < deadline and abs(bot.get_status().position.y - 221) > 2:
+            await asyncio.sleep(0.1)
+        if abs(bot.get_status().position.y - 221) > 2:
+            raise AssertionError("Jump setup teleport was not observed")
+
+        await asyncio.sleep(0.4)
+        ground = await authoritative_position()
+        await asyncio.sleep(0.3)
+        stable = await authoritative_position()
+        assert abs(stable["y"] - ground["y"]) < 0.1, (
+            f"No stable BDS platform for jump test: {ground} -> {stable}"
+        )
+        jump_sent = 0
+
+        def jump(source, event):
+            nonlocal jump_sent
+            if source is not bot or not isinstance(event, TickEvent) or jump_sent >= 14:
+                return
+            position = source.get_status().position
+            source.set_input(Input(
+                position=position, jumping=True,
+                flags=("JUMP_DOWN", "JUMP_CURRENT_RAW", "START_JUMPING", "JUMP_PRESSED_RAW")
+                if jump_sent == 0 else ("JUMP_DOWN", "JUMP_CURRENT_RAW"),
+            ))
+            jump_sent += 1
+
+        stop_jumping = runtime.subscribe(jump, events=event_mask(EventKind.tick))
+        jump_heights = []
+        try:
+            deadline = loop.time() + 3
+            while loop.time() < deadline and jump_sent < 14:
+                jump_heights.append((await authoritative_position())["y"])
+                await asyncio.sleep(0.04)
+        finally:
+            stop_jumping()
+        assert jump_sent == 14, f"Only sent {jump_sent} of 14 jump frames"
+        jump_rise = max(jump_heights, default=stable["y"]) - stable["y"]
+        results["jump"] = {
+            "ground": stable["y"], "sampled_heights": jump_heights,
+            "rise": jump_rise, "frames": jump_sent,
+        }
+        assert jump_rise > 0.25, f"BDS did not confirm vertical jump: {results['jump']}"
+        results["checks"].append("input_jump_server_confirmed")
 
         await bot.disconnect()
         results["single_survivor_list"] = await expect_players(1, other_name)
