@@ -9,7 +9,7 @@ on:
         description: 'Exact EndPilot commit SHA (40 lowercase hex characters)'
         required: false
         type: string
-        default: '73b26f632d4dc6f04f9448bacc1928fedc7b7ff2'
+        default: 'f0f9e9a57d1cca142ad5779fa9a3fbccbfbe7ae1'
 
 permissions:
   contents: read
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '73b26f632d4dc6f04f9448bacc1928fedc7b7ff2' }}
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || 'f0f9e9a57d1cca142ad5779fa9a3fbccbfbe7ae1' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,7 +41,7 @@ jobs:
         with:
           name: python-pure
           repository: ReallocAll/bedrock-protocol
-          run-id: 40091787005
+          run-id: 41063839447
           github-token: ${{ secrets.REPO_DEVELOP }}
           path: dependencies/pure
       - name: Get pinned Linux native protocol wheel
@@ -49,7 +49,7 @@ jobs:
         with:
           name: python-native-Linux
           repository: ReallocAll/bedrock-protocol
-          run-id: 40091787005
+          run-id: 41063839447
           github-token: ${{ secrets.REPO_DEVELOP }}
           path: dependencies/native
       - uses: actions/setup-python@v6

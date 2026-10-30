@@ -538,8 +538,20 @@ async def exercise(server, results):
 
         # A second real BDS client observes the first player's authoritative
         # actor metadata. Input flags alone would not prove sneak/sprint state.
-        server.command("setblock 2 220 0 stone")
+        # A contiguous BDS-controlled platform keeps both players grounded when
+        # moving forward to test sprint; otherwise the first bot falls off.
+        server.command("fill -3 220 -3 12 220 12 stone")
+        server.command(f"tp {PLAYER} 0.5 221 0.5")
         server.command(f"tp {other_name} 2.5 221 0.5")
+        deadline = loop.time() + 10
+        while loop.time() < deadline:
+            grounded = await authoritative_position()
+            local = bot.get_status().position
+            if abs(grounded["y"] - 221) < 0.2 and abs(local.y - 221) < 0.2:
+                break
+            await asyncio.sleep(0.05)
+        else:
+            raise AssertionError("Main bot was not server-confirmed on the sprint/sneak platform")
 
         def peer_flags():
             players = [actor for actor in other.get_observed_entities()
@@ -591,8 +603,15 @@ async def exercise(server, results):
                         raw_flags += ("SNEAK_DOWN", "SNEAK_PRESSED_RAW")
                 elif sent == 0:
                     raw_flags += ("SNEAK_RELEASED_RAW",)
+            if phase == "sprinting" and enabled:
+                raw_flags += ("SPRINT_DOWN",)
+            moving = phase == "sprinting" and enabled
+            delta = Vec3(0, 0, 0.09) if moving else Vec3()
+            position = source.get_status().position
             source.set_input(Input(
-                position=source.get_status().position,
+                position=Vec3(position.x, position.y, position.z + delta.z),
+                delta=delta,
+                move=Vec2(0, 1) if moving else Vec2(),
                 sneaking=enabled if phase == "sneaking" else False,
                 sprinting=enabled if phase == "sprinting" else False,
                 flags=raw_flags,
@@ -603,21 +622,30 @@ async def exercise(server, results):
         observed = []
         try:
             for phase_name, bit, target in (
-                ("sprinting", 3, True),
-                ("sprinting", 3, False),
                 ("sneaking", 1, True),
                 ("sneaking", 1, False),
+                ("sprinting", 3, True),
+                ("sprinting", 3, False),
             ):
+                start_server = await authoritative_position() if phase_name == "sprinting" and target else None
                 phase, enabled, sent = phase_name, target, 0
                 previous = len(peer_updates)
                 deadline = loop.time() + 7
                 while loop.time() < deadline:
                     await asyncio.sleep(0.03)
                     current = peer_flags()
-                    if sent >= 5 and current is not None and bool(current & (1 << bit)) == target and any(
+                    if sent >= (40 if target else 8) and current is not None and bool(current & (1 << bit)) == target and any(
                         bool(flags & (1 << bit)) == target for flags in peer_updates[previous:]
                     ):
                         observed.append({"state": phase_name, "enabled": target, "flags": current, "frames": sent})
+                        if start_server is not None:
+                            finish_server = await authoritative_position()
+                            displacement = math.hypot(finish_server["x"] - start_server["x"],
+                                                      finish_server["z"] - start_server["z"])
+                            assert displacement > 0.5, (
+                                f"Server never confirmed forward sprint movement: {start_server} -> {finish_server}"
+                            )
+                            results["sprint_server_displacement"] = displacement
                         break
                 else:
                     raise AssertionError(
