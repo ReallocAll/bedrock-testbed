@@ -511,8 +511,9 @@ async def exercise(server, results):
         ))
         server.command("fill -2 220 -2 6 220 3 stone")
         # Prepare a village bed before the trader spawns and can claim it.
+        # BDS constructs both halves from the head placement; the second
+        # setblock can fail because the matching foot is already present.
         server.command('setblock 3 221 3 minecraft:bed ["direction"=0,"head_piece_bit"=true]')
-        server.command('setblock 3 221 2 minecraft:bed ["direction"=0,"head_piece_bit"=false]')
         bed_probe = server.command(
             'execute if block 3 221 2 minecraft:bed run say BED_FOOT_CONFIRMED'
         )
@@ -590,7 +591,6 @@ async def exercise(server, results):
         profession = offers.source.display_name.lower()
         site = next((block for title, block in sites.items() if title in profession), None)
         assert site is not None, f"Unknown villager job site: {profession!r}"
-        server.command(f"setblock 4 221 0 minecraft:{site}")
         results["checks"].append("villager_trade_window_server_confirmed")
 
         # A single real Trade2 exchange: use a server-generated quote, and
@@ -1006,7 +1006,18 @@ async def exercise(server, results):
             "restocked_uses": None,
         }
         assert site is not None, f"Cannot identify BDS villager profession: {profession!r}"
-        server.command("time set 2000")
+        # Establish the station only after proving the recipe exhausted:
+        # working cannot interfere with the preceding controlled cycle.
+        station_start = server.command(f"setblock 2 221 1 minecraft:{site}")
+        server.command(f"execute if block 2 221 1 minecraft:{site} run say WORKSTATION_CONFIRMED")
+        station_deadline = loop.time() + 5
+        while loop.time() < station_deadline:
+            if any("WORKSTATION_CONFIRMED" in line for line in server.snapshot(station_start)):
+                break
+            await asyncio.sleep(0.1)
+        else:
+            raise AssertionError(f"BDS workstation placement failed: {server.snapshot(station_start)}")
+        server.command("time set 0")
         await asyncio.sleep(2)
         restock_deadline = loop.time() + 110
         while loop.time() < restock_deadline:
