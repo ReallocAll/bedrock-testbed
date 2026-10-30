@@ -510,7 +510,9 @@ async def exercise(server, results):
             server_initiated_close=False,
         ))
         server.command("fill -2 220 -2 6 220 3 stone")
-        server.command("setblock 4 221 0 composter")
+        # Prepare a village bed before the trader spawns and can claim it.
+        server.command('setblock 3 221 2 minecraft:bed ["direction"=0,"head_piece_bit"=false]')
+        server.command('testforblock 3 221 3 minecraft:bed ["head_piece_bit"=true]')
         server.command(f"tp {PLAYER} 0.5 221 0.5")
         server.command("summon villager 2.5 221 0.5")
         deadline = loop.time() + 12
@@ -560,6 +562,21 @@ async def exercise(server, results):
                 "reason": item.unsupported_reason,
             } for item in offers.offers
         ]
+        # Supply the matching job block *before* the first transaction, so
+        # BDS has an opportunity to claim it during ordinary villager ticks.
+        sites = {
+            "armorer": "blast_furnace", "butcher": "smoker",
+            "cartographer": "cartography_table", "cleric": "brewing_stand",
+            "farmer": "composter", "fisherman": "barrel",
+            "fletcher": "fletching_table", "leatherworker": "cauldron",
+            "librarian": "lectern", "mason": "stonecutter",
+            "shepherd": "loom", "toolsmith": "smithing_table",
+            "weaponsmith": "grindstone",
+        }
+        profession = offers.source.display_name.lower()
+        site = next((block for title, block in sites.items() if title in profession), None)
+        assert site is not None, f"Unknown villager job site: {profession!r}"
+        server.command(f"setblock 4 221 0 minecraft:{site}")
         results["checks"].append("villager_trade_window_server_confirmed")
 
         # A single real Trade2 exchange: use a server-generated quote, and
@@ -968,26 +985,13 @@ async def exercise(server, results):
         # Experimental real-game restock oracle. A Bedrock villager needs a
         # matching job block, village bed linkage and a work-time opportunity;
         # never reset recipe data or claim a restock based on client counters.
-        sites = {
-            "armorer": "blast_furnace", "butcher": "smoker",
-            "cartographer": "cartography_table", "cleric": "brewing_stand",
-            "farmer": "composter", "fisherman": "barrel",
-            "fletcher": "fletching_table", "leatherworker": "cauldron",
-            "librarian": "lectern", "mason": "stonecutter",
-            "shepherd": "loom", "toolsmith": "smithing_table",
-            "weaponsmith": "grindstone",
-        }
-        profession = new_offers.source.display_name.lower()
-        site = next((block for title, block in sites.items() if title in profession), None)
+
         results["villager"]["restock"] = {
             "profession": profession, "workstation": site,
             "original_exhausted_uses": still_exhausted.uses,
             "restocked_uses": None,
         }
         assert site is not None, f"Cannot identify BDS villager profession: {profession!r}"
-        server.command('setblock 3 221 2 minecraft:bed ["direction"=0,"head_piece_bit"=false]')
-        server.command('setblock 3 221 3 minecraft:bed ["direction"=0,"head_piece_bit"=true]')
-        server.command(f"setblock 4 221 0 minecraft:{site}")
         server.command("time set 2000")
         await asyncio.sleep(2)
         restock_deadline = loop.time() + 110
