@@ -721,14 +721,15 @@ async def exercise(server, results):
 
         # Old BDS entity, window and quote refs cannot cross Session lifetime.
         rejected = []
-        for label, action in (
-            ("window", lambda: bot.get_trade_offers(window.ref)),
-            ("actor", lambda: bot.interact_actor(target.ref)),
-            ("quote", lambda: bot.begin_trade(fresh.ref, destination)),
+        for label, expected_error, action in (
+            ("window", "stale or foreign trade window", lambda: bot.get_trade_offers(window.ref)),
+            ("actor", "stale or foreign entity", lambda: bot.interact_actor(target.ref)),
+            ("quote", "stale or foreign trade window", lambda: bot.begin_trade(fresh.ref, destination)),
         ):
             try:
                 action()
-            except RuntimeError:
+            except RuntimeError as error:
+                assert str(error) == expected_error, f"{label} failed for unrelated reason: {error}"
                 rejected.append(label)
             else:
                 raise AssertionError(f"Stale trade reference accepted after reconnect: {label}")
