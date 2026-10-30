@@ -4,6 +4,14 @@ Minimal real-server smoke tests on Ubuntu 24.04 x86-64. Server: **Endstone
 0.11.14 / BDS 1.26.52 / protocol 2193** on Python 3.13. Client: EndPilot
 `f0f9e9a57d1cca142ad5779fa9a3fbccbfbe7ae1` (default, overridable) on Python 3.12.
 
+The workflow runs the same public-API smoke suite independently against **RakNet**
+and **NetherNet** on clean BDS 26.52 instances. NetherNet additionally requires a
+real HTTP `/v1/join` capability response from the BDS process before the game
+handshake; successful signaling alone does not count as a pass. Every behavioral
+check uses server responses or BDS commands, not a simulated peer. The CLI
+defaults to RakNet for compatibility with earlier runs; select NetherNet with
+`--transport nethernet`. Each CI transport saves separate evidence artifacts.
+
 This testbed uses the exact CI-built `bedrock-protocol-native==0.5.0` wheels;
 a durable GitHub Release/PyPI source has not yet replaced the artifact pin. Use the
 CI-verified `python-pure` and `python-native-Linux` CPython 3.12 wheels from
@@ -87,7 +95,7 @@ and a subsequent public Trade2 request must be rejected locally without
 writing another ItemStackRequest packet. After disconnect/reconnect, the original BDS recipe must still be
 exhausted in the newly opened window, and the new Session must also reject
 a further attempt without sending an ItemStackRequest.
-The current smoke includes **25 checks**.
+The RakNet suite keeps its original checks; NetherNet adds a signaling precondition.
 No additional server boot or Bot manager is required.
 
 No production servers/worlds, generic adapters, custom packet codecs or test

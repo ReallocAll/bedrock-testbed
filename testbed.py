@@ -187,7 +187,8 @@ class Server:
             )
 
 
-def configure(path):
+def configure(path, transport):
+    properties = {**PROPERTIES, "transport": transport}
     if not path.is_file():
         raise FileNotFoundError(f"Endstone did not create {path}")
     updated = set()
@@ -195,21 +196,23 @@ def configure(path):
     for line in path.read_text().splitlines():
         if "=" in line and not line.lstrip().startswith("#"):
             key = line.split("=", 1)[0].strip()
-            if key in PROPERTIES:
-                line = key + "=" + PROPERTIES[key]
+            if key in properties:
+                line = key + "=" + properties[key]
                 updated.add(key)
         lines.append(line)
-    lines.extend(k + "=" + v for k, v in PROPERTIES.items() if k not in updated)
+    lines.extend(k + "=" + v for k, v in properties.items() if k not in updated)
     path.write_text("\n".join(lines) + "\n")
 
 
-async def exercise(server, results):
+async def exercise(server, results, transport):
     from bedrock_protocol import v2193
     from endpilot import (
         BotOptions, BotState, EventKind, Input, ItemRequestOutcome, PacketDecodedEvent,
         Runtime, SlotState, TickEvent, Vec2, Vec3, event_mask,
     )
 
+    endpoint = "http://127.0.0.1:19132" if transport == "nethernet" else "raknet://127.0.0.1:19132"
+    client_transport = {"transport": "raknet"} if transport == "raknet" else {}
     radius_events = []
     observer_radii = []
     observer_errors = []
@@ -228,7 +231,7 @@ async def exercise(server, results):
 
     async with Runtime(callback, events=event_mask(EventKind.packet_decoded)) as runtime:
         bot = runtime.add_bot(BotOptions(
-            server_url="raknet://127.0.0.1:19132", transport="raknet",
+            server_url=endpoint, **client_transport,
             protocol=2193, name=PLAYER, chunk_radius=16,
         ))
         await bot.wait_ready(65)
@@ -244,7 +247,7 @@ async def exercise(server, results):
         results["world_state"] = {"actor_runtime_id": status.actor_runtime_id, "dimension": status.dimension,
                                   "position": [status.position.x, status.position.y, status.position.z]}
         results["bds_online_list"] = await asyncio.to_thread(server.wait_player, True)
-        results["checks"].append("raknet_login_server_confirmed")
+        results["checks"].append(f"{transport}_login_server_confirmed")
 
         async def request_and_observe(requested):
             before = len(radius_events)
@@ -828,7 +831,7 @@ async def exercise(server, results):
         assert bot.get_trade_window() is None, "Reopened trade window remained open"
         results["checks"].append("villager_recipe_usage_server_confirmed")
 
-        # Two real RakNet players sharing one Runtime: closing one Session must
+        # Two real BDS players sharing one Runtime: closing one Session must
         # not cancel the other Bot or corrupt its inbound packet state.
         async def expect_players(count, *names):
             recent = []
@@ -846,7 +849,7 @@ async def exercise(server, results):
 
         other_name = "EndPilotPeer"
         other = runtime.add_bot(BotOptions(
-            server_url="raknet://127.0.0.1:19132", transport="raknet",
+            server_url=endpoint, **client_transport,
             protocol=2193, name=other_name, chunk_radius=16,
         ))
         await other.wait_ready(65)
@@ -1144,6 +1147,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--server-python", type=Path, required=True)
     parser.add_argument("--endpilot-commit", required=True, help="Full SHA expected from the EndPilot VCS install")
+    parser.add_argument("--transport", choices=("raknet", "nethernet"), default="raknet")
     args = parser.parse_args()
     # Preserve the venv executable path; resolve() follows its symlink to base Python.
     python = args.server_python.absolute()
@@ -1158,6 +1162,7 @@ def main():
         "endstone": "0.11.14",
         "bds": "1.26.52",
         "protocol": 2193,
+        "transport": args.transport,
         "python": sys.version.split()[0],
         "endpilot_commit": args.endpilot_commit,
         "installed_endpilot_commit": None,
@@ -1186,13 +1191,21 @@ def main():
         server.stop()
         server = None
 
-        configure(folder / "server.properties")
+        configure(folder / "server.properties", args.transport)
         shutil.rmtree(folder / "worlds", ignore_errors=True)
         server = Server(python, folder, logfile)
         server.start()
         server.wait_ready()
         results["checks"].append("clean_configured_bds_ready")
-        asyncio.run(exercise(server, results))
+        if args.transport == "nethernet":
+            from urllib.request import urlopen
+
+            with urlopen("http://127.0.0.1:19132/v1/join", timeout=8) as response:
+                status = response.status
+            assert 200 <= status < 300, f"NetherNet HTTP capability rejected: {status}"
+            results["signaling"] = {"endpoint": "http://127.0.0.1:19132/v1/join", "status": status}
+            results["checks"].append("nethernet_http_signaling_server_confirmed")
+        asyncio.run(exercise(server, results, args.transport))
         server.stop()
         server = None
         results["checks"].append("bds_graceful_stop_no_processes")
