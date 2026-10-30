@@ -639,6 +639,27 @@ async def exercise(server, results):
                     "state": name, "target": enabled, "observed": samples,
                     "metadata_packets": len(peer_updates),
                 })
+                if name == "sneaking" and enabled and not (
+                    flags is not None and flags & (1 << flag)
+                ):
+                    # Diagnostic only: determine whether an explicit native
+                    # PlayerAction, distinct from PlayerAuthInput, is accepted.
+                    zero = v2193.BlockPos(x=0, y=0, z=0)
+                    bot.send_packet(v2193.PlayerActionPacket(
+                        runtime_id=bot.get_status().actor_runtime_id,
+                        action=v2193.PlayerActionType.START_SNEAKING,
+                        pos=zero, result_pos=zero, face=-1,
+                    ))
+                    probe_deadline = loop.time() + 3
+                    action_flags = peer_flags()
+                    while (
+                        action_flags is None or not action_flags & (1 << flag)
+                    ) and loop.time() < probe_deadline:
+                        await asyncio.sleep(0.1)
+                        action_flags = peer_flags()
+                    results["player_action_sneak_probe"] = {
+                        "before": flags, "after": action_flags,
+                    }
                 assert flags is not None and bool(flags & (1 << flag)) == enabled, (
                     f"BDS did not synchronize {name}={enabled} to peer: flags={flags}"
                 )
