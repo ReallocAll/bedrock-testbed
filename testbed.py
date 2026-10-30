@@ -605,6 +605,7 @@ async def exercise(server, results):
 
         unsubscribe_input = runtime.subscribe(send_state, events=event_mask(EventKind.tick))
         observed = []
+        phase_failures = []
         try:
             for phase_name, bit, target in (
                 ("sneaking", 1, True),
@@ -627,17 +628,27 @@ async def exercise(server, results):
                             finish_server = await authoritative_position()
                             displacement = math.hypot(finish_server["x"] - start_server["x"],
                                                       finish_server["z"] - start_server["z"])
-                            assert displacement > 0.5, (
-                                f"Server never confirmed forward sprint movement: {start_server} -> {finish_server}"
-                            )
+                            if displacement <= 0.5:
+                                phase_failures.append(
+                                    f"Server never confirmed forward sprint movement: {start_server} -> {finish_server}"
+                                )
                             results["sprint_server_displacement"] = displacement
                         break
                 else:
-                    raise AssertionError(
+                    phase_failures.append(
                         f"BDS peer never confirmed {phase_name}={target} while sending input: "
                         f"frames={sent}, current={peer_flags()}, new_updates={peer_updates[previous:]}"
                     )
+                    if start_server is not None:
+                        finish_server = await authoritative_position()
+                        results["sprint_server_displacement"] = math.hypot(
+                            finish_server["x"] - start_server["x"],
+                            finish_server["z"] - start_server["z"],
+                        )
             results["peer_movement_flags"] = observed
+            results["peer_movement_failures"] = phase_failures
+            if phase_failures:
+                raise AssertionError("; ".join(phase_failures))
             results["checks"].append("sneak_sprint_peer_server_confirmed")
         finally:
             phase = None
