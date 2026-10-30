@@ -501,6 +501,16 @@ async def exercise(server, results):
         }
         results["checks"].append("item_move_transaction_server_confirmed")
 
+        # Release BDS's server-opened inventory UI before testing gameplay
+        # inputs; sending movement while a UI is open is not a valid control.
+        screen = opened_inventories[-1]
+        bot.send_packet(v2193.ContainerClosePacket(
+            container_id=screen.container_id,
+            container_type=screen.type,
+            server_initiated_close=False,
+        ))
+        await asyncio.sleep(0.2)
+
         # Two real RakNet players sharing one Runtime: closing one Session must
         # not cancel the other Bot or corrupt its inbound packet state.
         async def expect_players(count, *names):
