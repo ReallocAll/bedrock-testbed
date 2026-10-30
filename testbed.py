@@ -926,6 +926,32 @@ async def exercise(server, results):
             await asyncio.sleep(0.1)
             new_offers = bot.get_trade_offers(reopened.ref)
         assert new_offers is not None and new_offers.offers, "No new BDS trade offers"
+        still_exhausted = next((
+            offer for offer in new_offers.offers
+            if offer.ref and offer.ref.recipe_net_id == quote.ref.recipe_net_id
+        ), None)
+        assert still_exhausted is not None, "Reconnected villager lost exhausted recipe"
+        assert still_exhausted.uses == still_exhausted.max_uses == quote.max_uses, (
+            "Exhausted BDS recipe incorrectly reset after Bot reconnect"
+        )
+        slot = next((
+            item.slot for item in bot.get_player_inventory()
+            if item.state == SlotState.empty
+        ), None)
+        assert slot is not None, "No known empty slot for reconnected exhaustion refusal"
+        packets_before = bot.capture_statistics().packet_counts_out[147]
+        try:
+            bot.begin_trade(still_exhausted.ref, slot)
+        except RuntimeError as error:
+            assert str(error) == "trade is exhausted", (
+                f"Wrong refusal after reconnect: {error}"
+            )
+        else:
+            raise AssertionError("Reconnected Session admitted a BDS-exhausted trade")
+        assert bot.capture_statistics().packet_counts_out[147] == packets_before, (
+            "Reconnected exhausted trade emitted ItemStackRequest"
+        )
+        results["checks"].append("villager_exhaustion_persists_across_reconnect")
         results["villager"]["reconnect"] = {
             "stale_rejections": rejected,
             "old_session_id": window.ref.session_id,
