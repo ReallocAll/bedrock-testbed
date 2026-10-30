@@ -9,7 +9,7 @@ on:
         description: 'Exact EndPilot commit SHA (40 lowercase hex characters)'
         required: false
         type: string
-        default: '663aea82ae9a8b0d9050bcd4187584b78ee0681c'
+        default: '09697f37da681ba66556f06d15bde789666d57b1'
 
 permissions:
   contents: read
@@ -29,7 +29,7 @@ jobs:
         transport: [raknet, nethernet]
     timeout-minutes: 30
     env:
-      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '663aea82ae9a8b0d9050bcd4187584b78ee0681c' }}
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '09697f37da681ba66556f06d15bde789666d57b1' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ReallocAll/endpilot
-          ref: 663aea82ae9a8b0d9050bcd4187584b78ee0681c
+          ref: 09697f37da681ba66556f06d15bde789666d57b1
           path: pr-source
           persist-credentials: false
       - uses: actions/setup-python@v6
