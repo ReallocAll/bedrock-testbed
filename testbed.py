@@ -506,14 +506,21 @@ async def exercise(server, results):
         server.command(f"tp {PLAYER} 0.5 221 0.5")
         server.command(f"tp {other_name} 2.5 221 0.5")
         deadline = loop.time() + 10
+        previous_server_y = None
         while loop.time() < deadline:
             grounded = await authoritative_position()
             local = bot.get_status().position
-            if abs(grounded["y"] - 221) < 0.2 and abs(local.y - 221) < 0.2:
+            located = (abs(grounded["x"] - 0.5) < 0.2
+                       and abs(grounded["z"] - 0.5) < 0.2
+                       and abs(local.y - 221) < 0.2)
+            stable = (previous_server_y is not None
+                      and abs(grounded["y"] - previous_server_y) < 0.05)
+            if located and stable:
                 break
+            previous_server_y = grounded["y"] if located else None
             await asyncio.sleep(0.05)
         else:
-            raise AssertionError("Main bot was not server-confirmed on the sprint/sneak platform")
+            raise AssertionError("Main bot was not server-confirmed stable on the sprint/sneak platform")
 
         def peer_flags():
             players = [actor for actor in other.get_observed_entities()
