@@ -67,7 +67,14 @@ BDS grants four emeralds; the Bot observes their identity/count through
 the Item Registry, moves one from hotbar to main inventory, and awaits
 an authoritative ItemStackResponse. Item totals must remain four.
 Final `list` verifies **zero players online**, rather than only the
-absence of the original Bot. The current smoke includes **19 checks**.
+absence of the original Bot. A real BDS villager is summoned within interaction range, and EndPilot
+uses only its public entity reference, trade-window and item-request APIs.
+Since BDS chooses the villager profession and quotes, the smoke selects a
+single-ingredient, currently available trade that sells an emerald, grants
+the quoted input through BDS, stages one surplus item, executes the Trade2
+request, returns the residual and verifies item conservation. Each request
+must receive the successful server response, and BDS must acknowledge the
+container close. The current smoke includes **21 checks**.
 No additional server boot or Bot manager is required.
 
 No production servers/worlds, generic adapters, custom packet codecs or test

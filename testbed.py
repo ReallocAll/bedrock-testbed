@@ -501,6 +501,171 @@ async def exercise(server, results):
         }
         results["checks"].append("item_move_transaction_server_confirmed")
 
+        # Villager integration: BDS owns the trader, generated offers and
+        # trade window. Only use the Bot's public entity/window APIs.
+        screen = opened_inventories[-1]
+        bot.send_packet(v2193.ContainerClosePacket(
+            container_id=screen.container_id,
+            container_type=screen.type,
+            server_initiated_close=False,
+        ))
+        server.command("fill -2 220 -2 6 220 3 stone")
+        server.command("setblock 4 221 0 composter")
+        server.command(f"tp {PLAYER} 0.5 221 0.5")
+        server.command("summon villager 2.5 221 0.5")
+        deadline = loop.time() + 12
+        target = None
+        while loop.time() < deadline:
+            villagers = [
+                actor for actor in bot.get_observed_entities()
+                if actor.type in ("minecraft:villager", "minecraft:villager_v2")
+                and math.dist(
+                    (actor.position.x, actor.position.y, actor.position.z),
+                    (2.5, 221, 0.5),
+                ) < 5
+            ]
+            if len(villagers) == 1 and abs(bot.get_status().position.y - 221) < 3:
+                target = villagers[0]
+                break
+            await asyncio.sleep(0.1)
+        assert target is not None, f"BDS villager was not visible: {bot.get_observed_entities()}"
+        results["villager"] = {
+            "type": target.type, "unique_id": target.ref.unique_id,
+            "runtime_id": target.ref.runtime_id,
+        }
+        current = bot.get_status()
+        dx = target.position.x - current.position.x
+        dy = target.position.y + 1 - current.position.y
+        dz = target.position.z - current.position.z
+        bot.set_look(-math.degrees(math.atan2(dy, math.hypot(dx, dz))), math.degrees(math.atan2(-dx, dz)))
+        await asyncio.sleep(0.3)
+        bot.interact_actor(target.ref, Vec3(0, 1, 0))
+        deadline = loop.time() + 8
+        while bot.get_trade_window() is None and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        window = bot.get_trade_window()
+        assert window is not None, "BDS villager did not open a trade window"
+        deadline = loop.time() + 8
+        offers = bot.get_trade_offers(window.ref)
+        while (offers is None or not offers.offers) and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+            offers = bot.get_trade_offers(window.ref)
+        assert offers is not None and offers.offers, "BDS villager gave no trade offers"
+        results["villager"]["offers"] = [
+            {
+                "supported": item.supported,
+                "input": None if item.input is None else item.input.identifier,
+                "input_count": None if item.input is None else item.input.count,
+                "output": None if item.output is None else item.output.identifier,
+                "reason": item.unsupported_reason,
+            } for item in offers.offers
+        ]
+        results["checks"].append("villager_trade_window_server_confirmed")
+
+        # A single real Trade2 exchange: use a server-generated quote, and
+        # let BDS supply the ingredient. Every item request requires status 0.
+        quote = next((
+            offer for offer in offers.offers
+            if offer.supported and offer.ref is not None
+            and offer.input is not None and offer.second_input is None
+            and re.fullmatch(r"minecraft:[a-z0-9_]+", offer.input.identifier)
+            and offer.input.count < 64 and offer.output is not None
+            and offer.output.identifier == "minecraft:emerald"
+            and offer.uses < offer.max_uses
+        ), None)
+        assert quote is not None, f"No server-offered, single-ingredient trade: {results['villager']}"
+        ingredient = quote.input
+        output = quote.output
+        amount = ingredient.count + 1
+        player_source_count = bot.count_player_item(ingredient.identifier).observed_count
+        player_output_count = bot.count_player_item(output.identifier).observed_count
+        server.command(f"give {PLAYER} {ingredient.identifier} {amount}")
+        deadline = loop.time() + 10
+        source = None
+        while loop.time() < deadline:
+            source = next((
+                slot for slot in bot.get_player_inventory()
+                if slot.identifier == ingredient.identifier and slot.count >= amount
+            ), None)
+            if source is not None:
+                break
+            await asyncio.sleep(0.1)
+        assert source is not None, "BDS-granted trade ingredient was not observed"
+        input_slot = bot.trade_input(window.ref, 0)
+        deadline = loop.time() + 8
+        while bot.get_item(input_slot).state == SlotState.unknown and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        assert bot.get_item(input_slot).state == SlotState.empty, "BDS trade input not known empty"
+
+        async def confirm_trade_op(operation, step):
+            result = await operation.wait(12)
+            assert result.outcome == ItemRequestOutcome.completed and result.server_result == 0, (
+                f"BDS rejected {step}: {result}"
+            )
+            return result.server_result
+
+        stage_status = await confirm_trade_op(
+            bot.begin_move_item(source.slot, input_slot, amount), "stage ingredient"
+        )
+        assert bot.get_item(input_slot).identifier == ingredient.identifier
+        assert bot.get_item(input_slot).count == amount, "Staged ingredient amount differs"
+        fresh = next((
+            candidate for candidate in bot.get_trade_offers(window.ref).offers
+            if candidate.ref is not None and candidate.ref.recipe_net_id == quote.ref.recipe_net_id
+        ), None)
+        assert fresh is not None and fresh.supported, "Trade quote changed during staging"
+        destination = next((
+            slot.slot for slot in bot.get_player_inventory()
+            if slot.slot.index >= 9 and slot.state == SlotState.empty
+        ), None)
+        assert destination is not None, "No known empty output inventory slot"
+        trade_status = await confirm_trade_op(bot.begin_trade(fresh.ref, destination), "trade")
+        assert bot.get_item(destination).identifier == output.identifier
+        assert bot.get_item(destination).count == output.count, "No server-confirmed trade output"
+        assert bot.get_item(input_slot).count == 1, "Trade did not leave staged input residual"
+        return_status = await confirm_trade_op(
+            bot.begin_move_item(input_slot, source.slot, 1), "return residual"
+        )
+        assert bot.get_item(input_slot).state == SlotState.empty, "Residual was not returned"
+        assert bot.count_player_item(ingredient.identifier).observed_count == (
+            player_source_count + amount - ingredient.count
+        ), "Input conservation failed"
+        assert bot.count_player_item(output.identifier).observed_count == (
+            player_output_count + output.count
+        ), "Output conservation failed"
+        results["villager"]["trade"] = {
+            "input": ingredient.identifier, "price": ingredient.count,
+            "output": output.identifier, "output_count": output.count,
+            "stage_status": stage_status, "trade_status": trade_status,
+            "return_status": return_status,
+        }
+        closed_windows = []
+
+        def observe_trade_close(source, event):
+            if (
+                source is bot and isinstance(event, PacketDecodedEvent)
+                and event.packet.header.packet_id == 47
+                and int(event.packet.payload.container_id) == window.ref.window_id
+            ):
+                closed_windows.append(event.packet.payload)
+
+        stop_close_observer = runtime.subscribe(
+            observe_trade_close, events=event_mask(EventKind.packet_decoded)
+        )
+        try:
+            bot.close_container(window.ref)
+            deadline = loop.time() + 8
+            while (
+                bot.get_trade_window() is not None or not closed_windows
+            ) and loop.time() < deadline:
+                await asyncio.sleep(0.1)
+            assert bot.get_trade_window() is None and closed_windows, (
+                "BDS did not acknowledge trade window closure"
+            )
+        finally:
+            stop_close_observer()
+        results["checks"].append("villager_trade_exchange_server_confirmed")
+
         # Two real RakNet players sharing one Runtime: closing one Session must
         # not cancel the other Bot or corrupt its inbound packet state.
         async def expect_players(count, *names):
