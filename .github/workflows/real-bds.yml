@@ -9,7 +9,7 @@ on:
         description: 'Exact EndPilot commit SHA (40 lowercase hex characters)'
         required: false
         type: string
-        default: 'e2cd3b04f73da15392062b76f7c0be16041703fd'
+        default: '2c38066ad41772499db8791397c787c3c306c3f4'
 
 permissions:
   contents: read
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || 'e2cd3b04f73da15392062b76f7c0be16041703fd' }}
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '2c38066ad41772499db8791397c787c3c306c3f4' }}
     steps:
       - uses: actions/checkout@v4
         with:
