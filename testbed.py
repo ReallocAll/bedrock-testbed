@@ -564,19 +564,13 @@ async def exercise(server, results):
 
         # A single real Trade2 exchange: use a server-generated quote, and
         # let BDS supply the ingredient. Every item request requires status 0.
-        allowed_ingredients = {
-            "minecraft:stick": "stick", "minecraft:flint": "flint",
-            "minecraft:feather": "feather", "minecraft:wheat": "wheat",
-            "minecraft:carrot": "carrot", "minecraft:potato": "potato",
-            "minecraft:coal": "coal", "minecraft:string": "string",
-            "minecraft:paper": "paper",
-        }
         quote = next((
             offer for offer in offers.offers
             if offer.supported and offer.ref is not None
             and offer.input is not None and offer.second_input is None
-            and offer.input.identifier in allowed_ingredients
+            and re.fullmatch(r"minecraft:[a-z0-9_]+", offer.input.identifier)
             and offer.input.count < 64 and offer.output is not None
+            and offer.output.identifier == "minecraft:emerald"
             and offer.uses < offer.max_uses
         ), None)
         assert quote is not None, f"No server-offered, single-ingredient trade: {results['villager']}"
@@ -585,7 +579,7 @@ async def exercise(server, results):
         amount = ingredient.count + 1
         player_source_count = bot.count_player_item(ingredient.identifier).observed_count
         player_output_count = bot.count_player_item(output.identifier).observed_count
-        server.command(f"give {PLAYER} {allowed_ingredients[ingredient.identifier]} {amount}")
+        server.command(f"give {PLAYER} {ingredient.identifier} {amount}")
         deadline = loop.time() + 10
         source = None
         while loop.time() < deadline:
