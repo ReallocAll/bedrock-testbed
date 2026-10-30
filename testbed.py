@@ -447,6 +447,34 @@ async def exercise(server, results):
         )
         results["checks"].append("item_registry_inventory_server_confirmed")
 
+        # The server must acknowledge opening a player's inventory UI before
+        # processing main-inventory item requests (Interact / ContainerOpen).
+        opened_inventories = []
+
+        def observe_inventory_open(source, event):
+            if (
+                source is bot and isinstance(event, PacketDecodedEvent)
+                and event.packet.header.packet_id == 46
+            ):
+                opened_inventories.append(event.packet.payload)
+
+        stop_inventory_observer = runtime.subscribe(
+            observe_inventory_open, events=event_mask(EventKind.packet_decoded)
+        )
+        try:
+            bot.send_packet(v2193.InteractPacket(
+                action=v2193.InteractPacket.Action.OPEN_INVENTORY,
+                target_id=bot.get_status().actor_runtime_id,
+                pos=None,
+            ))
+            deadline = loop.time() + 8
+            while not opened_inventories and loop.time() < deadline:
+                await asyncio.sleep(0.1)
+            assert opened_inventories, "BDS did not acknowledge opening player inventory"
+        finally:
+            stop_inventory_observer()
+        results["checks"].append("player_inventory_screen_server_confirmed")
+
         slots = bot.get_player_inventory()
         source = next(
             (slot for slot in slots if slot.identifier == item_id and slot.count == 4), None
