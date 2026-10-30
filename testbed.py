@@ -580,6 +580,32 @@ async def exercise(server, results):
         )
         results["peer_metadata_updates"] = peer_updates
 
+        # Establish that this peer/field really reflects live BDS state:
+        # a server-applied invisibility effect must change ActorFlags bit 5.
+        server.command(f"effect {PLAYER} invisibility 10 0 true")
+        deadline = loop.time() + 5
+        observed_invisible = peer_flags()
+        while (
+            observed_invisible is None or not observed_invisible & (1 << 5)
+        ) and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+            observed_invisible = peer_flags()
+        results["invisibility_probe"] = {
+            "initial": baseline_flags, "observed": observed_invisible,
+        }
+        assert observed_invisible is not None and observed_invisible & (1 << 5), (
+            "Peer ActorFlags oracle did not reflect server-applied invisibility"
+        )
+        server.command(f"effect {PLAYER} clear")
+        deadline = loop.time() + 5
+        while (
+            (observed_invisible := peer_flags()) is None or observed_invisible & (1 << 5)
+        ) and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        assert observed_invisible is not None and not observed_invisible & (1 << 5), (
+            "Peer ActorFlags oracle did not reflect clearing invisibility"
+        )
+
         async def toggle_and_observe(name, flag, enabled, frames=15):
             sent = 0
 
