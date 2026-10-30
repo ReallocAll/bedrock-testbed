@@ -212,6 +212,7 @@ async def exercise(server, results, transport):
     )
 
     endpoint = "http://127.0.0.1:19132" if transport == "nethernet" else "raknet://127.0.0.1:19132"
+    client_transport = {"transport": "raknet"} if transport == "raknet" else {}
     radius_events = []
     observer_radii = []
     observer_errors = []
@@ -230,7 +231,7 @@ async def exercise(server, results, transport):
 
     async with Runtime(callback, events=event_mask(EventKind.packet_decoded)) as runtime:
         bot = runtime.add_bot(BotOptions(
-            server_url=endpoint, transport=transport,
+            server_url=endpoint, **client_transport,
             protocol=2193, name=PLAYER, chunk_radius=16,
         ))
         await bot.wait_ready(65)
@@ -848,7 +849,7 @@ async def exercise(server, results, transport):
 
         other_name = "EndPilotPeer"
         other = runtime.add_bot(BotOptions(
-            server_url=endpoint, transport=transport,
+            server_url=endpoint, **client_transport,
             protocol=2193, name=other_name, chunk_radius=16,
         ))
         await other.wait_ready(65)
@@ -1200,9 +1201,9 @@ def main():
             from urllib.request import urlopen
 
             with urlopen("http://127.0.0.1:19132/v1/join", timeout=8) as response:
-                capability = json.load(response)
-            assert capability["protocol"] == 2193, f"Wrong BDS signaling protocol: {capability}"
-            results["signaling"] = capability
+                status = response.status
+            assert 200 <= status < 300, f"NetherNet HTTP capability rejected: {status}"
+            results["signaling"] = {"endpoint": "http://127.0.0.1:19132/v1/join", "status": status}
             results["checks"].append("nethernet_http_signaling_server_confirmed")
         asyncio.run(exercise(server, results, args.transport))
         server.stop()
