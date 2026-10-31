@@ -766,7 +766,7 @@ async def _session_scene(server, runtime, bot, results, endpoint, client_transpo
         if offer.ref is not None and offer.input is not None and offer.output is not None
         and offer.second_input is None
         and offer.input.identifier == trade.ingredient.identifier
-        and offer.trade.output.identifier == trade.output.identifier
+        and offer.output.identifier == trade.output.identifier
     ]
     assert len(matching) == 1, (
         f"Reconnected villager has {len(matching)} matching trades for "
