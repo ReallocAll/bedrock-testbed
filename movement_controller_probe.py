@@ -140,17 +140,27 @@ async def exercise(server, results, transport):
             await asyncio.sleep(0.6)
             loaded = await authoritative()
             assert abs(loaded[0] - 0.5) < 0.25 and abs(loaded[2] - 0.5) < 0.25
-            offset = server.command("fill -16 99 -16 16 99 16 stone")
-            deadline = loop.time() + 5
-            while loop.time() < deadline:
-                lines = server.snapshot(offset)
+            # Fresh BDS worlds can acknowledge teleport before all nearby chunks
+            # become editable. Retry this existing setup command, not the test.
+            for attempt in range(5):
+                offset = server.command("fill -16 99 -16 16 99 16 stone")
+                deadline = loop.time() + 5
+                while loop.time() < deadline:
+                    lines = server.snapshot(offset)
+                    if any("blocks filled" in v.lower() or "block filled" in v.lower() for v in lines):
+                        break
+                    if any("outside of the world" in v.lower() or "failed" in v.lower() for v in lines):
+                        break
+                    await asyncio.sleep(0.05)
+                else:
+                    raise TimeoutError("BDS did not answer platform fill")
                 if any("blocks filled" in v.lower() or "block filled" in v.lower() for v in lines):
                     break
-                if any("outside of the world" in v.lower() or "failed" in v.lower() for v in lines):
+                if not any("outside of the world" in v.lower() for v in lines):
                     raise AssertionError(f"BDS platform rejected: {lines}")
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.7)
             else:
-                raise TimeoutError("BDS did not confirm platform fill")
+                raise AssertionError(f"BDS chunks never became editable: {lines}")
 
             await goal_case("straight_8", 0, 8)
             await goal_case("turn_minus_x_4", -4, 0)
