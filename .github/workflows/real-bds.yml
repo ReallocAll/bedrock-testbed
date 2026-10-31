@@ -21,15 +21,16 @@ concurrency:
 jobs:
   endpilot:
     if: github.actor == 'ReallocAll'
-    name: EndPilot (${{ matrix.transport }})
+    name: EndPilot (${{ matrix.transport }}, ${{ matrix.sdk }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         transport: [raknet, nethernet]
+        sdk: ${{ fromJSON(github.ref_name == 'test/navigation-continuous-20261101' && '["baseline","candidate"]' || '["default"]') }}
     timeout-minutes: 30
     env:
-      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || 'c988b2efe26fb475e518ea50490ac48f17b4a6de' }}
+      ENDPILOT_COMMIT: ${{ matrix.sdk == 'baseline' && 'c988b2efe26fb475e518ea50490ac48f17b4a6de' || matrix.sdk == 'candidate' && 'bd6548177c39cf9c923ac8de6d6563d2c0957981' || inputs.endpilot_commit || 'c988b2efe26fb475e518ea50490ac48f17b4a6de' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -93,7 +94,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-bds-endpilot-${{ matrix.transport }}
+          name: real-bds-endpilot-${{ matrix.transport }}-${{ matrix.sdk }}
           path: |
             work/result.json
             work/world_probe.json
