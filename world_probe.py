@@ -11,7 +11,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from testbed import ROOT, PLAYER, Server, configure
+from server import ROOT, PLAYER, Server, configure
 from endpilot import BotOptions, EventKind, PacketDecodedEvent, Runtime, event_mask
 from endpilot.world import WorldQuery
 
