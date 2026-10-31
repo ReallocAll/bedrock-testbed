@@ -8,7 +8,8 @@ import sys
 from dataclasses import replace
 
 import testbed
-from testbed import PLAYER, ROOT
+import scenarios
+from server import PLAYER, ROOT
 
 
 async def exercise(server, results, transport):
@@ -255,5 +256,5 @@ async def exercise(server, results, transport):
 
 
 if __name__ == "__main__":
-    testbed.exercise = exercise
+    scenarios.exercise = exercise
     sys.exit(testbed.main())
