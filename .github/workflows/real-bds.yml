@@ -78,6 +78,8 @@ jobs:
         run: |
           if [[ "${{ github.ref_name }}" == test/stability-* ]]; then
             .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}" --stability
+          elif [[ "${{ github.ref_name }}" == test/motion-* ]]; then
+            .venv-client/bin/python motion_probe.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
           else
             .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
           fi
@@ -88,6 +90,7 @@ jobs:
           name: real-bds-endpilot-${{ matrix.transport }}
           path: |
             work/result.json
+            work/motion_trajectory.json
             work/bds.log
             work/server/version.txt
             work/server/server.properties
