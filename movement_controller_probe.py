@@ -65,14 +65,14 @@ async def exercise(server, results, transport):
                     frame.move.x != 0 or frame.move.y != 0
                 ):
                     active_case["stale_move_frames"] += 1
-            if active_case is not None and active_case.get("inject_bad_position") and controller.frames == 8:
-                # Perturb one outgoing prediction only, not the motion model.
-                # BDS authority must reject this inconsistent client position.
+            if (active_case is not None and active_case.get("inject_bad_position")
+                    and 8 <= controller.frames < 24):
+                # Sustain the discrepancy for multiple ticks; one isolated
+                # divergent frame was accepted without correction by real BDS.
                 frame = replace(frame, position=Vec3(
                     frame.position.x + 0.45, frame.position.y, frame.position.z,
                 ))
-                active_case["inject_bad_position"] = False
-                active_case["injected"] = True
+                active_case["injected"] = active_case.get("injected", 0) + 1
             source.set_input(frame)
 
     async with Runtime() as runtime:
