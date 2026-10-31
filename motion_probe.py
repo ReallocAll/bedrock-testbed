@@ -180,7 +180,7 @@ async def exercise_motion(server, results, transport):
             await asyncio.sleep(0.6)
             loaded = await authoritative()
             assert abs(loaded[0] - 0.5) < 0.25 and abs(loaded[2] - 0.5) < 0.25
-            offset = server.command("fill -8 99 -8 8 99 8 stone")
+            offset = server.command("fill -16 99 -16 16 99 16 stone")
             fill_deadline = loop.time() + 5
             while loop.time() < fill_deadline:
                 response = server.snapshot(offset)
