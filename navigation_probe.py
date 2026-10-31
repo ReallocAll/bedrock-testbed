@@ -215,6 +215,41 @@ async def exercise(server, results, transport):
             await query_world()
             await known((0, 0), (0, 8), (3, 4))
 
+            # Frontier-only planning on real decoded BDS cells, with a test-
+            # imposed unknown boundary. This is NOT natural distant loading.
+            from endpilot.navigation import plan_frontier
+
+            class LimitedObservedView:
+                def can_stand(self, x, y, z):
+                    if -1 <= x <= 1 and 0 <= z <= 8:
+                        return world.can_stand(x, y, z)
+                    return None
+
+            await known(*((x, z) for x in range(-1, 2) for z in range(9)))
+            limited = LimitedObservedView()
+            partial = await plan_frontier(limited, (0, 100, 0), GoalNear(0, 100, 12))
+            assert partial.status == "frontier" and partial.frontier == (0, 100, 8)
+            assert partial.progressed and partial.path[-1] == partial.frontier
+            assert all(world.can_stand(*node) is True for node in partial.path)
+            assert all(limited.can_stand(*node) is True for node in partial.path)
+            assert all(max(abs(b[0] - a[0]), abs(b[2] - a[2])) == 1
+                       for a, b in zip(partial.path, partial.path[1:]))
+            assert partial.cost == 8.0
+            records.append({
+                "name": "controlled_safe_frontier",
+                "world_source": "real_bds_decoded_worldquery",
+                "unknown_source": "test_imposed_view_not_natural_unloaded_subchunks",
+                "status": partial.status, "frontier": partial.frontier,
+                "path": partial.path, "cost": partial.cost,
+                "expanded": partial.expanded, "stand_queries": partial.stand_queries,
+                "max_batch_ms": partial.max_batch_ms,
+            })
+            complete = await plan_frontier(world, (0, 100, 0), GoalNear(0, 100, 8))
+            assert complete.status == "complete" and complete.frontier is None
+            assert all(world.can_stand(*node) is True for node in complete.path)
+            records.append({"name": "known_safe_frontier_complete",
+                            "status": complete.status, "path": complete.path})
+
             # Strict A/B metrics: same scenario, oracle, transport and code for
             # both pinned SDK SHAs. The reset/known-world waits are not timed.
             for length in (8, 16):
