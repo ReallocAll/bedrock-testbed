@@ -1186,6 +1186,7 @@ async def exercise_stability(server, results, transport):
         while loop.time() < deadline:
             states = [b.get_status().state for b in bots]
             if all(s in (BotState.failed, BotState.closed) for s in states):
+                assert all(s == BotState.failed for s in states), f"Unexpected SIGKILL session states: {states}"
                 return [s.name for s in states]
             await asyncio.sleep(0.5)
         raise TimeoutError(f"Sessions did not close after BDS SIGKILL: {states}")
@@ -1272,6 +1273,7 @@ async def exercise_stability(server, results, transport):
                    if t is not asyncio.current_task() and not t.done()
                    and t.get_name().startswith(("bedrock-", "endpilot-"))]
         assert not pending, f"SDK tasks remained after Runtime shutdown: {pending}"
+        assert not errors, f"Asyncio loop exception handler observed: {errors}"
         results["checks"].append("no_sdk_tasks_after_runtime_close")
     finally:
         results["loop_exceptions"] = errors
