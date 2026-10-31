@@ -93,6 +93,7 @@ async def observe(server, results, transport):
         except Exception as e:
             errors.append(f"packet {pid}: {type(e).__name__}: {e}")
     async with Runtime(callback, events=event_mask(EventKind.packet_decoded)) as runtime:
+        loop = asyncio.get_running_loop()
         bot = runtime.add_bot(BotOptions(
             server_url=endpoint, transport=transport, protocol=2193, name=PLAYER,
             chunk_radius=8, client_cache=False, validate_all_packets=True,
@@ -182,7 +183,7 @@ async def observe(server, results, transport):
             "block_updates": updates,
             "oracle": oracle,
             "observer_errors": errors,
-            "status": "PASS" if (
+            "initial_status": "PASS" if (
                 chunks and subchunks and any(
                     e["result"] == 1 for item in subchunks for e in item["entries"]
                 ) and all(oracle.values()) and
@@ -190,6 +191,7 @@ async def observe(server, results, transport):
                 and world_valid and not errors
             ) else "INCOMPLETE",
         })
+        assert results["initial_status"] == "PASS", "world data/oracle checks incomplete"
         print("WORLD_SUMMARY " + json.dumps({
             "status": results["status"], "start_game": start_game, "counts": dict(counts),
             "chunk_examples": [{k: v for k, v in c.items() if k != "raw"} for c in chunks[:10]],
@@ -247,6 +249,7 @@ async def observe(server, results, transport):
         results["reconnect_invalidated"] = True
         await bot.disconnect()
         unsubscribe_world()
+        results["status"] = "PASS"
         print("WORLD_LIFECYCLE " + json.dumps({
             "dimension_invalidated": results["dimension_invalidated"],
             "reloaded_after_return": results["reloaded_world_after_dimension_return"],
@@ -278,6 +281,7 @@ def main():
         server.wait_ready()
         asyncio.run(observe(server, results, args.transport))
     except BaseException as e:
+        results["status"] = "FAIL"
         results["error"] = f"{type(e).__name__}: {e}"
         print(results["error"], flush=True)
     finally:
