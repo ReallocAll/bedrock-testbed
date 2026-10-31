@@ -29,6 +29,8 @@ async def exercise(server, results, transport):
     records = []
     results["navigation"] = {"cases": records}
     forwarded = 0
+    corrections = 0
+    controller_starts = 0
     exceptions = []
     async with Runtime() as runtime:
         bot = runtime.add_bot(BotOptions(
@@ -38,12 +40,22 @@ async def exercise(server, results, transport):
         ))
         world = WorldQuery(bot)
         navigator = Navigator(bot, world)
+        original_start = navigator.controller.start
+
+        def track_start(*args, **kwargs):
+            nonlocal controller_starts
+            controller_starts += 1
+            return original_start(*args, **kwargs)
+
+        navigator.controller.start = track_start
 
         def observe(source, event):
-            nonlocal forwarded
+            nonlocal forwarded, corrections
             if source is not bot:
                 return
             try:
+                if isinstance(event, PositionEvent) and event.correction:
+                    corrections += 1
                 frame = navigator.on_event(event)
                 if frame is not None:
                     forwarded += 1
@@ -166,6 +178,8 @@ async def exercise(server, results, transport):
             records.append(record)
             start = loop.time()
             sent = forwarded
+            starts = controller_starts
+            corrected = corrections
             await asyncio.wait_for(navigator.goto(destination), timeout)
             record["navigation_ms"] = round((loop.time() - start) * 1000, 3)
             plan = navigator.last_plan
@@ -176,6 +190,9 @@ async def exercise(server, results, transport):
                 "max_batch_ms": plan.max_batch_ms,
             }
             record["frames"] = forwarded - sent
+            record["execution_segments"] = controller_starts - starts
+            record["corrections"] = corrections - corrected
+            assert record["corrections"] == 0, record
             await asyncio.sleep(.3)
             p1 = await authoritative()
             await asyncio.sleep(.3)
@@ -193,20 +210,42 @@ async def exercise(server, results, transport):
             await authoritative()
             server.command(f"tp {PLAYER} 0.5 100 0.5")
             await asyncio.sleep(.8)
-            await fill("fill -12 100 -12 12 105 12 air")
-            await fill("fill -12 99 -12 12 99 12 stone")
+            await fill("fill -12 100 -12 12 105 28 air")
+            await fill("fill -12 99 -12 12 99 28 stone")
             await query_world()
             await known((0, 0), (0, 8), (3, 4))
 
-            straight = await run_goal("straight", GoalNear(0, 100, 8))
-            assert all(node[0] == 0 for node in straight["plan"]["path"])
+            # Strict A/B metrics: same scenario, oracle, transport and code for
+            # both pinned SDK SHAs. The reset/known-world waits are not timed.
+            for length in (8, 16):
+                for repeat in range(3):
+                    straight = await run_goal(
+                        f"straight_{length}_r{repeat + 1}", GoalNear(0, 100, length))
+                    assert all(node[0] == 0 for node in straight["plan"]["path"])
+                    assert len(straight["plan"]["path"]) == length + 1
+
+            # Narrow corridor with known solid walls on both sides.
+            await fill("fill -1 100 1 -1 101 8 stone")
+            await fill("fill 1 100 1 1 101 8 stone")
+            corridor = await run_goal("one_wide_corridor", GoalNear(0, 100, 8))
+            assert all(node[0] == 0 for node in corridor["plan"]["path"])
+            await fill("fill -1 100 1 -1 101 8 air")
+            await fill("fill 1 100 1 1 101 8 air")
+            await wait_stand(-1, 4, True)
+            await wait_stand(1, 4, True)
+
+            diagonal = await run_goal("diagonal", GoalNear(8, 100, 8))
+            assert any(a[0] != b[0] and a[2] != b[2]
+                       for a, b in zip(diagonal["plan"]["path"],
+                                       diagonal["plan"]["path"][1:]))
 
             await fill("fill 0 100 2 0 101 6 stone")
             await known((0, 3), (-1, 3), (1, 3))
             await wait_stand(0, 3, False)
-            detour = await run_goal("wall_detour", GoalNear(0, 100, 8))
-            assert all(not (x == 0 and 2 <= z <= 6) for x, _, z in detour["plan"]["path"])
-            assert any(x != 0 for x, _, _ in detour["plan"]["path"])
+            for repeat in range(3):
+                detour = await run_goal(f"wall_detour_r{repeat + 1}", GoalNear(0, 100, 8))
+                assert all(not (x == 0 and 2 <= z <= 6) for x, _, z in detour["plan"]["path"])
+                assert any(x != 0 for x, _, _ in detour["plan"]["path"])
             await fill("fill 0 100 2 0 101 6 air")
             await wait_stand(0, 3, True)
 
