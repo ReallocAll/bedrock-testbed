@@ -807,9 +807,9 @@ async def _session_scene(server, runtime, bot, results, endpoint, client_transpo
         await asyncio.sleep(0.1)
     assert bot.get_trade_window() is None, "Reconnected trade window did not close"
     results["checks"].append("trade_references_rejected_and_reopened_after_reconnect")
-    return other
+    return other, other_name
 
-async def _stance_scene(server, runtime, bot, other, results):
+async def _stance_scene(server, runtime, bot, other, other_name, results):
     """Peer-observed authoritative sneak and sprint states."""
     loop = asyncio.get_running_loop()
     # A second real BDS client observes the first player's authoritative
@@ -979,8 +979,8 @@ async def exercise(server, results, transport):
         await _movement_scene(server, runtime, bot, results)
         await _inventory_scene(server, runtime, bot, results)
         trade = await _trade_scene(server, runtime, bot, results)
-        other = await _session_scene(server, runtime, bot, results, endpoint, client_transport, trade)
-        await _stance_scene(server, runtime, bot, other, results)
+        other, other_name = await _session_scene(server, runtime, bot, results, endpoint, client_transport, trade)
+        await _stance_scene(server, runtime, bot, other, other_name, results)
         await bot.disconnect()
         await other.disconnect()
         results["bds_offline_list"] = await _expect_players(server, 0)
