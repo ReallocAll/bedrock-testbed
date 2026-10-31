@@ -9,7 +9,7 @@ on:
         description: 'Exact EndPilot commit SHA (40 lowercase hex characters)'
         required: false
         type: string
-        default: 'f0f9e9a57d1cca142ad5779fa9a3fbccbfbe7ae1'
+        default: 'c3d0201c8fa6f8882313a15a01530758585b06b4'
 
 permissions:
   contents: read
@@ -29,7 +29,7 @@ jobs:
         transport: [raknet, nethernet]
     timeout-minutes: 30
     env:
-      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || 'f0f9e9a57d1cca142ad5779fa9a3fbccbfbe7ae1' }}
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || 'c3d0201c8fa6f8882313a15a01530758585b06b4' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -74,7 +74,13 @@ jobs:
           .venv-client/bin/python -m pip check
           .venv-client/bin/python -m pip show endpilot bedrock-protocol-native
       - name: Exercise public Typed Packet API against fresh real BDS
-        run: .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_name }}" == test/stability-* ]]; then
+            .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}" --stability
+          else
+            .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
+          fi
       - name: Save evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
