@@ -5,6 +5,7 @@ import asyncio
 import json
 import math
 import sys
+from dataclasses import replace
 
 import testbed
 from testbed import PLAYER, ROOT
@@ -64,6 +65,14 @@ async def exercise(server, results, transport):
                     frame.move.x != 0 or frame.move.y != 0
                 ):
                     active_case["stale_move_frames"] += 1
+            if active_case is not None and active_case.get("inject_bad_position") and controller.frames == 8:
+                # Perturb one outgoing prediction only, not the motion model.
+                # BDS authority must reject this inconsistent client position.
+                frame = replace(frame, position=Vec3(
+                    frame.position.x + 0.45, frame.position.y, frame.position.z,
+                ))
+                active_case["inject_bad_position"] = False
+                active_case["injected"] = True
             source.set_input(frame)
 
     async with Runtime() as runtime:
@@ -207,6 +216,18 @@ async def exercise(server, results, transport):
             await wait_state(("failed",))
             rec["failure"] = controller.failure
             assert "position" in controller.failure or "correction" in controller.failure, rec
+
+            p, rec = await begin("forced_server_correction")
+            rec["inject_bad_position"] = True
+            controller.start(bot.get_status(), Vec3(p[0], p[1], p[2] + 8))
+            await wait_state(("failed",), seconds=7)
+            rec["failure"] = controller.failure
+            rec["prediction_invalidated"] = controller.predicted_position is None
+            assert rec.get("injected") and rec["correction_packets"] >= 1, rec
+            assert rec["correction_events"] >= 1 and rec["prediction_invalidated"], rec
+            count = controller.frames
+            await asyncio.sleep(0.2)
+            assert controller.frames == count, rec
 
             p, rec = await begin("disconnect_reconnect")
             controller.start(bot.get_status(), Vec3(p[0], p[1], p[2] + 8))
