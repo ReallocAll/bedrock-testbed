@@ -31,14 +31,6 @@ async def exercise(server, results, transport):
     forwarded = 0
     corrections = 0
     controller_starts = 0
-    original_start = navigator.controller.start
-
-    def track_start(*args, **kwargs):
-        nonlocal controller_starts
-        controller_starts += 1
-        return original_start(*args, **kwargs)
-
-    navigator.controller.start = track_start
     exceptions = []
     async with Runtime() as runtime:
         bot = runtime.add_bot(BotOptions(
@@ -48,6 +40,14 @@ async def exercise(server, results, transport):
         ))
         world = WorldQuery(bot)
         navigator = Navigator(bot, world)
+        original_start = navigator.controller.start
+
+        def track_start(*args, **kwargs):
+            nonlocal controller_starts
+            controller_starts += 1
+            return original_start(*args, **kwargs)
+
+        navigator.controller.start = track_start
 
         def observe(source, event):
             nonlocal forwarded, corrections
