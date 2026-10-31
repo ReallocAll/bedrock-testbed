@@ -139,28 +139,32 @@ async def exercise(server, results, transport):
             server.command(f"tp {PLAYER} 0.5 100 0.5")
             await asyncio.sleep(0.6)
             loaded = await authoritative()
-            assert abs(loaded[0] - 0.5) < 0.25 and abs(loaded[2] - 0.5) < 0.25
-            # Fresh BDS worlds can acknowledge teleport before all nearby chunks
-            # become editable. Retry this existing setup command, not the test.
-            for attempt in range(5):
-                offset = server.command("fill -16 99 -16 16 99 16 stone")
-                deadline = loop.time() + 5
-                while loop.time() < deadline:
-                    lines = server.snapshot(offset)
-                    if any("blocks filled" in v.lower() or "block filled" in v.lower() for v in lines):
-                        break
-                    if any("outside of the world" in v.lower() or "failed" in v.lower() for v in lines):
-                        break
-                    await asyncio.sleep(0.05)
-                else:
-                    raise TimeoutError("BDS did not answer platform fill")
-                if any("blocks filled" in v.lower() or "block filled" in v.lower() for v in lines):
-                    break
-                if not any("outside of the world" in v.lower() for v in lines):
-                    raise AssertionError(f"BDS platform rejected: {lines}")
-                await asyncio.sleep(0.7)
-            else:
+            assert abs(loaded[1] - 101.62001) < 0.25, loaded
+            # Natural terrain at the spawn coordinates can displace a newly
+            # teleported player (observed RakNet x=1.3). Clear it before reset.
+            # Fresh BDS worlds may also acknowledge tp before chunks are editable.
+            async def fill_blocks(command):
+                for attempt in range(5):
+                    offset = server.command(command)
+                    deadline = loop.time() + 5
+                    while loop.time() < deadline:
+                        lines = server.snapshot(offset)
+                        if any("blocks filled" in v.lower() or "block filled" in v.lower()
+                               for v in lines):
+                            return
+                        if any("outside of the world" in v.lower() or "failed" in v.lower()
+                               for v in lines):
+                            break
+                        await asyncio.sleep(0.05)
+                    else:
+                        raise TimeoutError(f"BDS did not answer {command}")
+                    if not any("outside of the world" in v.lower() for v in lines):
+                        raise AssertionError(f"BDS fill rejected: {lines}")
+                    await asyncio.sleep(0.7)
                 raise AssertionError(f"BDS chunks never became editable: {lines}")
+
+            await fill_blocks("fill -12 100 -12 12 105 12 air")
+            await fill_blocks("fill -12 99 -12 12 99 12 stone")
 
             await goal_case("straight_8", 0, 8)
             await goal_case("turn_minus_x_4", -4, 0)
