@@ -1193,9 +1193,14 @@ async def exercise_stability(server, results, transport):
     try:
         results["baseline_resources"] = resources()
         async with Runtime() as runtime:
-            bots = [runtime.add_bot(BotOptions(server_url=endpoint,
-                        transport=transport, protocol=2193, name=name, chunk_radius=8)) for name in names]
-            await asyncio.gather(*(bot.wait_ready(65) for bot in bots))
+            bots = []
+            for name in names:
+                bot = runtime.add_bot(BotOptions(server_url=endpoint,
+                            transport=transport, protocol=2193, name=name, chunk_radius=8))
+                bots.append(bot)
+                await bot.wait_ready(65)
+                if transport == "raknet" and name != names[-1]:
+                    await asyncio.sleep(8)  # BDS rejects simultaneous new connections from one IP.
             await expect_players(2)
             original_ids = [bot.get_status().session_id for bot in bots]
             old_slot = bots[0].player_slot(0)
@@ -1245,8 +1250,11 @@ async def exercise_stability(server, results, transport):
             await asyncio.to_thread(server.wait_ready)
             await asyncio.sleep(3)
             assert all(bot.get_status().state != BotState.ready for bot in bots), "Undeclared automatic reconnect"
-            await asyncio.gather(*(bot.reconnect() for bot in bots))
-            await asyncio.gather(*(bot.wait_ready(65) for bot in bots))
+            for index, bot in enumerate(bots):
+                await bot.reconnect()
+                await bot.wait_ready(65)
+                if transport == "raknet" and index == 0:
+                    await asyncio.sleep(8)
             await expect_players(2)
             assert all(bot.get_status().session_id > old for bot, old in zip(bots, original_ids))
             try:
