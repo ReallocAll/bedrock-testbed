@@ -16,7 +16,7 @@ async def exercise_motion(server, results, transport):
     )
 
     endpoint = "http://127.0.0.1:19132" if transport == "nethernet" else "raknet://127.0.0.1:19132"
-    traces = {"transport": transport, "phases": [], "packets": [], "positions": [], "errors": []}
+    traces = {"transport": transport, "phases": [], "packets": [], "positions": [], "resets": [], "errors": []}
     results["motion"] = {"traces": "work/motion_trajectory.json"}
     loop = asyncio.get_running_loop()
     start = loop.time()
@@ -122,7 +122,7 @@ async def exercise_motion(server, results, transport):
     async with Runtime() as runtime:
         bot = runtime.add_bot(BotOptions(
             server_url=endpoint, protocol=2193, name=PLAYER, chunk_radius=16,
-            transport=transport,
+            transport=transport, validate_all_packets=True,
         ))
         await bot.wait_ready(65)
         assert bot.get_status().state == BotState.ready
@@ -138,9 +138,12 @@ async def exercise_motion(server, results, transport):
             while loop.time() < deadline:
                 p = await authoritative()
                 local = bot.get_status().position
-                if abs(p[0] - 0.5) < 0.25 and abs(p[2] - 0.5) < 0.25 and abs(p[1] - 100) < 0.5 and abs(local.y - 100) < 1:
+                if abs(p[0] - 0.5) < 0.25 and abs(p[2] - 0.5) < 0.25 and abs(p[1] - 101.62) < 0.5 and abs(local.y - 100) < 2.5:
                     await asyncio.sleep(0.2)
-                    return await authoritative()
+                    observed = await authoritative()
+                    current = xyz(bot.get_status().position)
+                    traces["resets"].append({"ms": stamp(), "server_query": observed, "client_status": current})
+                    return current
                 await asyncio.sleep(0.08)
             raise AssertionError(f"Could not reset BDS to test platform: {p}; local={xyz(bot.get_status().position)}")
 
