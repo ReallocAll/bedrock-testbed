@@ -97,7 +97,19 @@ async def exercise_motion(server, results, transport):
         if phase["name"] == "move_only":
             d = (0, 0, 0)
         previous = phase["pred"]
-        next_p = tuple(previous[i] + d[i] for i in range(3))
+        if phase["name"].startswith("calibrated_"):
+            vx, vz = phase["model_v"]
+            right, forward = phase["move"]
+            heading = math.radians(phase["yaw"])
+            ux = math.cos(heading) * right - math.sin(heading) * forward
+            uz = math.sin(heading) * right + math.cos(heading) * forward
+            mx, mz = vx + 0.098 * ux, vz + 0.098 * uz
+            next_p = (previous[0] + mx, previous[1], previous[2] + mz)
+            post = (mx * 0.546, mz * 0.546)
+            phase["model_v"] = post
+            d = (post[0], -0.0784, post[1])
+        else:
+            next_p = tuple(previous[i] + d[i] for i in range(3))
         phase["pred"] = next_p
         is_jump = phase["name"] == "jump" and n < 14
         flags = ()
@@ -150,13 +162,14 @@ async def exercise_motion(server, results, transport):
             raise AssertionError(f"Could not reset BDS to test platform: {p}; local={xyz(bot.get_status().position)}")
 
         async def run_phase(name, count, delta=(0, 0, 0), move=(0, 0), yaw=0,
-                            sprint=False, start=None, stop_sprint=False, sample_gap=0.09):
+                            sprint=False, start=None, stop_sprint=False, sample_gap=0.09,
+                            model_v=(0, 0)):
             nonlocal active
             phase = {
                 "name": name, "count": count, "sent": 0, "session": bot.get_status().session_id,
                 "delta": delta, "move": move, "yaw": yaw, "sprint": sprint,
                 "stop_sprint": stop_sprint, "pred": tuple(start if start is not None else await authoritative()),
-                "inputs": [], "samples": [],
+                "model_v": model_v, "inputs": [], "samples": [],
             }
             traces["phases"].append(phase)
             phase["initial_bds"] = await sample(phase)
@@ -229,6 +242,16 @@ async def exercise_motion(server, results, transport):
 
             origin = await reset()
             await run_phase("position_disagreement", 15, (0, 0, 0), (0, 0), start=origin)
+
+            origin = await reset()
+            calibrated = await run_phase("calibrated_straight", 42, move=(0, 1), start=origin)
+            after_calibrated = await run_phase(
+                "calibrated_stop", 24, start=calibrated["pred"],
+                model_v=calibrated["model_v"],
+            )
+            after_calibrated["settled_bds"] = await sample(after_calibrated)
+            origin = await reset()
+            await run_phase("calibrated_turn90", 38, move=(0, 1), yaw=90, start=origin)
 
             origin = await reset()
             interrupted = await run_phase("disconnect_in_flight", 4, (0, 0, 0.09), (0, 1), start=origin)
