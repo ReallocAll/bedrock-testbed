@@ -9,7 +9,7 @@ on:
         description: 'Exact EndPilot commit SHA (40 lowercase hex characters)'
         required: false
         type: string
-        default: '47c14fd5934d7d6a56792c3db9b631d830372982'
+        default: 'c6ac14450daeb0dde2c6a6acc60fab40f78dbf4d'
 
 permissions:
   contents: read
@@ -29,7 +29,7 @@ jobs:
         transport: [raknet, nethernet]
     timeout-minutes: 30
     env:
-      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '47c14fd5934d7d6a56792c3db9b631d830372982' }}
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || 'c6ac14450daeb0dde2c6a6acc60fab40f78dbf4d' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,6 +78,8 @@ jobs:
         run: |
           if [[ "${{ github.ref_name }}" == test/world-data-* ]]; then
             .venv-client/bin/python world_probe.py --server-python .venv-server/bin/python --transport "${{ matrix.transport }}"
+          elif [[ "${{ github.ref_name }}" == test/navigation-* ]]; then
+            .venv-client/bin/python navigation_probe.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
           elif [[ "${{ github.ref_name }}" == test/controller-* ]]; then
             .venv-client/bin/python movement_controller_probe.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
           elif [[ "${{ github.ref_name }}" == test/motion-* ]]; then
@@ -97,6 +99,7 @@ jobs:
             work/world_probe.json
             work/motion_trajectory.json
             work/controller_trajectory.json
+            work/navigation_trajectory.json
             work/bds.log
             work/server/version.txt
             work/server/server.properties
