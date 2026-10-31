@@ -99,6 +99,11 @@ async def exercise_motion(server, results, transport):
         previous = phase["pred"]
         if phase["name"].startswith("calibrated_"):
             vx, vz = phase["model_v"]
+            if phase["name"] == "calibrated_goal":
+                # Solve the remaining braking distance for the last analog input.
+                target = phase["goal_z"]
+                release = ((target - previous[2]) * (1 - 0.546) - vz) / 0.098
+                phase["move"] = (0, max(0.0, min(1.0, release)))
             right, forward = phase["move"]
             heading = math.radians(phase["yaw"])
             ux = math.cos(heading) * right - math.sin(heading) * forward
@@ -163,13 +168,13 @@ async def exercise_motion(server, results, transport):
 
         async def run_phase(name, count, delta=(0, 0, 0), move=(0, 0), yaw=0,
                             sprint=False, start=None, stop_sprint=False, sample_gap=0.09,
-                            model_v=(0, 0)):
+                            model_v=(0, 0), goal_z=None):
             nonlocal active
             phase = {
                 "name": name, "count": count, "sent": 0, "session": bot.get_status().session_id,
                 "delta": delta, "move": move, "yaw": yaw, "sprint": sprint,
                 "stop_sprint": stop_sprint, "pred": tuple(start if start is not None else await authoritative()),
-                "model_v": model_v, "inputs": [], "samples": [],
+                "model_v": model_v, "goal_z": goal_z, "inputs": [], "samples": [],
             }
             traces["phases"].append(phase)
             phase["initial_bds"] = await sample(phase)
@@ -252,6 +257,15 @@ async def exercise_motion(server, results, transport):
             after_calibrated["settled_bds"] = await sample(after_calibrated)
             origin = await reset()
             await run_phase("calibrated_turn90", 38, move=(0, 1), yaw=90, start=origin)
+
+            origin = await reset()
+            goal = await run_phase("calibrated_goal", 64, start=origin, goal_z=8.5)
+            actual_goal = await sample(goal)
+            goal["target"] = [0.5, 101.62001, 8.5]
+            goal["arrival_error_z"] = abs(actual_goal[2] - 8.5)
+            assert goal["arrival_error_z"] < 0.1, (
+                f"Real BDS target arrival error too large: {goal['arrival_error_z']}"
+            )
 
             origin = await reset()
             interrupted = await run_phase("disconnect_in_flight", 4, (0, 0, 0.09), (0, 1), start=origin)
