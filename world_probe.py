@@ -134,7 +134,7 @@ async def observe(server, results, transport):
             "observer_errors": errors,
             "status": "PASS" if (
                 chunks and subchunks and any(
-                    e["result"] == 0 for item in subchunks for e in item["entries"]
+                    e["result"] == 1 for item in subchunks for e in item["entries"]
                 ) and all(oracle.values()) and
                 any(u.get("pos") == [0, 220, 0] for u in updates)
                 and not errors
