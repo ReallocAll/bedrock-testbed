@@ -76,7 +76,9 @@ jobs:
       - name: Exercise public Typed Packet API against fresh real BDS
         shell: bash
         run: |
-          if [[ "${{ github.ref_name }}" == test/stability-* ]]; then
+          if [[ "${{ github.ref_name }}" == test/world-data-* ]]; then
+            .venv-client/bin/python world_probe.py --server-python .venv-server/bin/python --transport "${{ matrix.transport }}"
+          elif [[ "${{ github.ref_name }}" == test/stability-* ]]; then
             .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}" --stability
           else
             .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
@@ -88,6 +90,7 @@ jobs:
           name: real-bds-endpilot-${{ matrix.transport }}
           path: |
             work/result.json
+            work/world_probe.json
             work/bds.log
             work/server/version.txt
             work/server/server.properties
