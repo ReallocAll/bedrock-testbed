@@ -26,10 +26,12 @@ def sample(raw):
     }
 
 async def observe(server, results, transport):
+    from bedrock_protocol import v2193
     endpoint = "http://127.0.0.1:19132" if transport == "nethernet" else "raknet://127.0.0.1:19132"
     counts = Counter()
     chunks, subchunks, updates = [], [], []
     errors = []
+    change_acks = []
     start_game = {}
     def callback(bot, event):
         if not isinstance(event, PacketDecodedEvent):
@@ -39,6 +41,8 @@ async def observe(server, results, transport):
         counts[pid] += 1
         p = envelope.payload
         try:
+            if pid == 36 and p.action == v2193.PlayerActionType.CHANGE_DIMENSION_ACK:
+                change_acks.append(int(p.runtime_id))
             if pid == 11:
                 start_game.update({
                     "network_ids_are_hashes": bool(p.block_network_ids_are_hashes),
@@ -231,28 +235,47 @@ async def observe(server, results, transport):
         }, ensure_ascii=False), flush=True)
         # Verify actual BDS dimension changes, not fabricated DimensionEvent.
         before_session = bot.get_status().session_id
+        before_ack = len(change_acks)
         server.command(f"execute as {PLAYER} in nether run tp @s 0 110 0")
         deadline = loop.time() + 25
-        while loop.time() < deadline and bot.get_status().dimension != 1:
+        while loop.time() < deadline and (
+            bot.get_status().dimension != 1 or len(change_acks) == before_ack
+        ):
             await asyncio.sleep(0.1)
-        assert bot.get_status().dimension == 1, "BDS did not change dimension to Nether"
+        assert bot.get_status().dimension == 1 and len(change_acks) > before_ack, (
+            "BDS Nether change did not finish dimension acknowledgement"
+        )
         assert world.observed_subchunks == 0, "Overworld subchunks retained after BDS Nether transfer"
         assert world.block(0, 220, 0) is None
         results["dimension_invalidated"] = True
 
+        before_ack = len(change_acks)
         server.command(f"execute as {PLAYER} in overworld run tp @s 0 221 0")
         deadline = loop.time() + 25
-        while loop.time() < deadline and bot.get_status().dimension != 0:
-            await asyncio.sleep(0.1)
-        assert bot.get_status().dimension == 0, "BDS did not restore Overworld"
-        for cx in (0, 1, -1):
-            bot.request_sub_chunks(0, cx, 0, [13, 14])
-        deadline = loop.time() + 15
         while loop.time() < deadline and (
-            world.block(0, 220, 0) is None or world.block(0, 220, 0).name != "minecraft:stone"
+            bot.get_status().dimension != 0 or len(change_acks) == before_ack
         ):
             await asyncio.sleep(0.1)
-        assert world.block(0, 220, 0) is not None, "Reload did not reconstruct world view"
+        assert bot.get_status().dimension == 0 and len(change_acks) > before_ack, (
+            "BDS Overworld return did not finish dimension acknowledgement"
+        )
+        # Chunks can finish streaming later than the dimension ACK. Retry the
+        # real request rather than asserting fabricated world state.
+        deadline = loop.time() + 25
+        next_request = 0.0
+        while loop.time() < deadline:
+            observed = world.block(0, 220, 0)
+            if observed is not None and observed.name == "minecraft:stone":
+                break
+            if loop.time() >= next_request:
+                for cx in (0, 1, -1):
+                    bot.request_sub_chunks(0, cx, 0, [13, 14])
+                next_request = loop.time() + 2
+            await asyncio.sleep(0.2)
+        assert world.block(0, 220, 0) is not None, (
+            f"Reload did not reconstruct world view: observed={world.observed_subchunks}, "
+            f"acks={len(change_acks)}"
+        )
         assert world.block(0, 220, 0).name == "minecraft:stone"
         results["reloaded_world_after_dimension_return"] = True
 
@@ -279,6 +302,7 @@ async def observe(server, results, transport):
             "reloaded_after_return": results["reloaded_world_after_dimension_return"],
             "publisher_invalidated": results["publisher_invalidated"],
             "reconnect_invalidated": results["reconnect_invalidated"],
+            "dimension_acks": len(change_acks),
             "incremental_updates_before_snapshot": results["incremental_updates_before_snapshot"],
             "decode_samples": decode_samples,
         }), flush=True)
