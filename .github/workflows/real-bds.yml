@@ -9,7 +9,7 @@ on:
         description: 'Exact EndPilot commit SHA (40 lowercase hex characters)'
         required: false
         type: string
-        default: 'c3d0201c8fa6f8882313a15a01530758585b06b4'
+        default: '77a22fefa8486b63b44bb0cf6c7c1dc095b2dbed'
 
 permissions:
   contents: read
@@ -29,7 +29,7 @@ jobs:
         transport: [raknet, nethernet]
     timeout-minutes: 30
     env:
-      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || 'c3d0201c8fa6f8882313a15a01530758585b06b4' }}
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '77a22fefa8486b63b44bb0cf6c7c1dc095b2dbed' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -76,7 +76,9 @@ jobs:
       - name: Exercise public Typed Packet API against fresh real BDS
         shell: bash
         run: |
-          if [[ "${{ github.ref_name }}" == test/stability-* ]]; then
+          if [[ "${{ github.ref_name }}" == test/world-data-* ]]; then
+            .venv-client/bin/python world_probe.py --server-python .venv-server/bin/python --transport "${{ matrix.transport }}"
+          elif [[ "${{ github.ref_name }}" == test/stability-* ]]; then
             .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}" --stability
           else
             .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
@@ -88,6 +90,7 @@ jobs:
           name: real-bds-endpilot-${{ matrix.transport }}
           path: |
             work/result.json
+            work/world_probe.json
             work/bds.log
             work/server/version.txt
             work/server/server.properties
