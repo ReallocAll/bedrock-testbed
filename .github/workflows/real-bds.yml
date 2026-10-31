@@ -9,7 +9,7 @@ on:
         description: 'Exact EndPilot commit SHA (40 lowercase hex characters)'
         required: false
         type: string
-        default: 'd750c45c0948c549f2f9ea6ce076320e8f313945'
+        default: '36579092645c7def17e8eb89142a534807bb7f10'
 
 permissions:
   contents: read
@@ -29,7 +29,7 @@ jobs:
         transport: [raknet, nethernet]
     timeout-minutes: 30
     env:
-      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || 'd750c45c0948c549f2f9ea6ce076320e8f313945' }}
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '36579092645c7def17e8eb89142a534807bb7f10' }}
     steps:
       - uses: actions/checkout@v4
         with:

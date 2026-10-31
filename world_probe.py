@@ -7,6 +7,7 @@ import hashlib
 import json
 import shutil
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -97,8 +98,21 @@ async def observe(server, results, transport):
             chunk_radius=8, client_cache=False, validate_all_packets=True,
         ))
         world = WorldQuery(bot)
+        decode_samples = []
+        def observe_world(bot, event):
+            start_ns = time.perf_counter_ns()
+            world.observe(bot, event)
+            if isinstance(event, PacketDecodedEvent) and event.packet.header.packet_id == 174:
+                raw_bytes = sum(
+                    len(e.serialized_sub_chunk or b"") for e in event.packet.payload.sub_chunk_data
+                )
+                decode_samples.append({
+                    "elapsed_ns": time.perf_counter_ns() - start_ns,
+                    "serialized_bytes": raw_bytes,
+                    "entry_count": len(event.packet.payload.sub_chunk_data),
+                })
         unsubscribe_world = runtime.subscribe(
-            world.observe,
+            observe_world,
             events=event_mask(EventKind.packet_decoded) | event_mask(EventKind.dimension) | event_mask(EventKind.state),
         )
         await bot.wait_ready(70)
@@ -159,6 +173,7 @@ async def observe(server, results, transport):
             "world_stand": stand,
             "observed_subchunks": world.observed_subchunks,
             "world_query_verified": world_valid,
+            "subchunk_decode_timings": decode_samples,
 
             "start_game": start_game,
             "packet_counts": dict(counts),
@@ -188,9 +203,57 @@ async def observe(server, results, transport):
             "world_blocks": observed, "world_stand": stand, "world_valid": world_valid,
             "observed_subchunks": world.observed_subchunks,
         }, ensure_ascii=False), flush=True)
+        # Verify actual BDS dimension changes, not fabricated DimensionEvent.
+        before_session = bot.get_status().session_id
+        server.command(f"execute as {PLAYER} in nether run tp @s 0 110 0")
+        deadline = loop.time() + 25
+        while loop.time() < deadline and bot.get_status().dimension != 1:
+            await asyncio.sleep(0.1)
+        assert bot.get_status().dimension == 1, "BDS did not change dimension to Nether"
+        assert world.observed_subchunks == 0, "Overworld subchunks retained after BDS Nether transfer"
+        assert world.block(0, 220, 0) is None
+        results["dimension_invalidated"] = True
+
+        server.command(f"execute as {PLAYER} in overworld run tp @s 0 221 0")
+        deadline = loop.time() + 25
+        while loop.time() < deadline and bot.get_status().dimension != 0:
+            await asyncio.sleep(0.1)
+        assert bot.get_status().dimension == 0, "BDS did not restore Overworld"
+        for cx in (0, 1, -1):
+            bot.request_sub_chunks(0, cx, 0, [13, 14])
+        deadline = loop.time() + 15
+        while loop.time() < deadline and (
+            world.block(0, 220, 0) is None or world.block(0, 220, 0).name != "minecraft:stone"
+        ):
+            await asyncio.sleep(0.1)
+        assert world.block(0, 220, 0) is not None, "Reload did not reconstruct world view"
+        assert world.block(0, 220, 0).name == "minecraft:stone"
+        results["reloaded_world_after_dimension_return"] = True
+
+        # Packet 121 explicitly publishes the view center and radius in blocks.
+        server.command(f"tp {PLAYER} 600.5 221 0.5")
+        deadline = loop.time() + 15
+        while loop.time() < deadline and world.block(0, 220, 0) is not None:
+            await asyncio.sleep(0.1)
+        assert world.block(0, 220, 0) is None, "Old publisher view still queryable"
+        results["publisher_invalidated"] = True
+
+        await bot.disconnect()
+        assert world.observed_subchunks == 0, "world retained data after disconnect"
+        await bot.reconnect()
+        await bot.wait_ready(70)
+        assert bot.get_status().session_id != before_session
+        assert world.block(0, 220, 0) is None, "new Session reused old world view"
+        results["reconnect_invalidated"] = True
         await bot.disconnect()
         unsubscribe_world()
-        assert world.observed_subchunks == 0, "world retained data after disconnect"
+        print("WORLD_LIFECYCLE " + json.dumps({
+            "dimension_invalidated": results["dimension_invalidated"],
+            "reloaded_after_return": results["reloaded_world_after_dimension_return"],
+            "publisher_invalidated": results["publisher_invalidated"],
+            "reconnect_invalidated": results["reconnect_invalidated"],
+            "decode_samples": decode_samples,
+        }), flush=True)
 
 def main():
     import argparse
