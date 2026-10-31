@@ -12,6 +12,7 @@ from pathlib import Path
 
 from testbed import ROOT, PLAYER, Server, configure
 from endpilot import BotOptions, EventKind, PacketDecodedEvent, Runtime, event_mask
+from endpilot.world import WorldQuery
 
 def sample(raw):
     data = bytes(raw)
@@ -95,6 +96,11 @@ async def observe(server, results, transport):
             server_url=endpoint, transport=transport, protocol=2193, name=PLAYER,
             chunk_radius=8, client_cache=False, validate_all_packets=True,
         ))
+        world = WorldQuery(bot)
+        unsubscribe_world = runtime.subscribe(
+            world.observe,
+            events=event_mask(EventKind.packet_decoded) | event_mask(EventKind.dimension) | event_mask(EventKind.state),
+        )
         await bot.wait_ready(70)
         await asyncio.to_thread(server.wait_player, True)
         server.command(f"tp {PLAYER} 0.5 221 0.5")
@@ -108,6 +114,9 @@ async def observe(server, results, transport):
         server.command("setblock 1 220 0 glass")
         server.command("setblock 16 220 0 stone")
         server.command("setblock -1 220 0 stone")
+        server.command("setblock 0 222 0 stone")
+        await asyncio.sleep(0.3)
+        server.command("setblock 0 222 0 air")
         await asyncio.sleep(3)
         for cx in (0, 1, -1):
             bot.request_sub_chunks(0, cx, 0, [13, 14])
@@ -124,7 +133,33 @@ async def observe(server, results, transport):
             await asyncio.sleep(0.6)
             oracle[marker] = any(marker in x for x in server.snapshot(offset))
         await asyncio.sleep(1)
+        expected = {
+            (0, 220, 0): "minecraft:stone",
+            (1, 220, 0): "minecraft:glass",
+            (16, 220, 0): "minecraft:stone",
+            (-1, 220, 0): "minecraft:stone",
+            (0, 222, 0): "minecraft:air",
+        }
+        observed = {}
+        for pos, name in expected.items():
+            block = world.block(*pos)
+            observed[str(pos)] = None if block is None else {
+                "name": block.name, "runtime_id": block.runtime_id, "solid": block.solid,
+            }
+        unknown = world.block(500, 220, 500)
+        stand = world.can_stand(0, 221, 0)
+        world_valid = (
+            all(observed[str(pos)] is not None
+                and observed[str(pos)]["name"] == name for pos, name in expected.items())
+            and unknown is None and stand is True
+        )
         results.update({
+            "world_blocks": observed,
+            "world_unknown": unknown is None,
+            "world_stand": stand,
+            "observed_subchunks": world.observed_subchunks,
+            "world_query_verified": world_valid,
+
             "start_game": start_game,
             "packet_counts": dict(counts),
             "chunks": chunks,
@@ -137,7 +172,7 @@ async def observe(server, results, transport):
                     e["result"] == 1 for item in subchunks for e in item["entries"]
                 ) and all(oracle.values()) and
                 any(u.get("pos") == [0, 220, 0] for u in updates)
-                and not errors
+                and world_valid and not errors
             ) else "INCOMPLETE",
         })
         print("WORLD_SUMMARY " + json.dumps({
@@ -150,8 +185,12 @@ async def observe(server, results, transport):
                 ]} for c in subchunks[:5]
             ],
             "updates": updates[-15:], "oracle": oracle, "observer_errors": errors,
+            "world_blocks": observed, "world_stand": stand, "world_valid": world_valid,
+            "observed_subchunks": world.observed_subchunks,
         }, ensure_ascii=False), flush=True)
         await bot.disconnect()
+        unsubscribe_world()
+        assert world.observed_subchunks == 0, "world retained data after disconnect"
 
 def main():
     import argparse
