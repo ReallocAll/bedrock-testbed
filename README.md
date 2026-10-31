@@ -2,7 +2,7 @@
 
 Minimal real-server smoke tests on Ubuntu 24.04 x86-64. Server: **Endstone
 0.11.14 / BDS 1.26.52 / protocol 2193** on Python 3.13. Client: EndPilot
-`f0f9e9a57d1cca142ad5779fa9a3fbccbfbe7ae1` (default, overridable) on Python 3.12.
+`603aee40b2dfbabc3ee932dab3b8ebb97fe0ec1d` (default, overridable) on Python 3.12.
 
 The workflow runs the same public-API smoke suite independently against **RakNet**
 and **NetherNet** on clean BDS 26.52 instances. NetherNet additionally requires a
@@ -33,9 +33,9 @@ python3.13 -m venv .venv-server
 python3.12 -m venv .venv-client
 # Extract the pinned artifacts to dependencies/pure and dependencies/native first.
 .venv-client/bin/python -m pip install dependencies/pure/*.whl dependencies/native/*.whl \
-  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@f0f9e9a57d1cca142ad5779fa9a3fbccbfbe7ae1'
+  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@603aee40b2dfbabc3ee932dab3b8ebb97fe0ec1d'
 .venv-client/bin/python testbed.py --server-python .venv-server/bin/python \
-  --endpilot-commit f0f9e9a57d1cca142ad5779fa9a3fbccbfbe7ae1
+  --endpilot-commit 603aee40b2dfbabc3ee932dab3b8ebb97fe0ec1d
 ```
 
 Use Actions **Run workflow** with the optional `endpilot_commit` input to test an exact
