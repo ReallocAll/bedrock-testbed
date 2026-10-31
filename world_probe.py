@@ -75,7 +75,7 @@ async def observe(server, results, transport):
                     item["entries"].append(row)
                 subchunks.append(item)
             elif pid in (21, 110):
-                if len(updates) < 150:
+                if len(updates) < 150 or (p.pos.x in (-1, 0, 1, 16) and p.pos.y in (220, 222)):
                     updates.append({
                         "packet": pid, "pos": [p.pos.x, p.pos.y, p.pos.z],
                         "runtime_id": int(p.runtime_id), "layer": int(p.layer),
