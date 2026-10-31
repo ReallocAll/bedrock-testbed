@@ -139,10 +139,12 @@ async def exercise_motion(server, results, transport):
                 p = await authoritative()
                 local = bot.get_status().position
                 if abs(p[0] - 0.5) < 0.25 and abs(p[2] - 0.5) < 0.25 and abs(p[1] - 101.62) < 0.5 and abs(local.y - 100) < 2.5:
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.4)
                     observed = await authoritative()
                     current = xyz(bot.get_status().position)
                     traces["resets"].append({"ms": stamp(), "server_query": observed, "client_status": current})
+                    if abs(observed[1] - 101.62001) > 0.13:
+                        raise AssertionError(f"Real BDS platform is not stable: {observed}; client={current}")
                     return current
                 await asyncio.sleep(0.08)
             raise AssertionError(f"Could not reset BDS to test platform: {p}; local={xyz(bot.get_status().position)}")
@@ -172,9 +174,25 @@ async def exercise_motion(server, results, transport):
             return phase
 
         try:
-            # Reuse the real vanilla world and server console command/query oracle.
-            server.command("fill -24 99 -24 24 99 24 stone")
-            await asyncio.sleep(0.4)
+            # Teleport first: fill is rejected if the target chunk isn't loaded.
+            # Require an acknowledged native BDS fill, not merely command submission.
+            server.command(f"tp {PLAYER} 0.5 100 0.5")
+            await asyncio.sleep(0.6)
+            loaded = await authoritative()
+            assert abs(loaded[0] - 0.5) < 0.25 and abs(loaded[2] - 0.5) < 0.25
+            offset = server.command("fill -8 99 -8 8 99 8 stone")
+            fill_deadline = loop.time() + 5
+            while loop.time() < fill_deadline:
+                response = server.snapshot(offset)
+                if any("blocks filled" in line.lower() or "block filled" in line.lower() for line in response):
+                    break
+                if any("outside of the world" in line.lower() or "syntax error" in line.lower()
+                       or "failed" in line.lower() for line in response):
+                    raise AssertionError(f"BDS platform construction rejected: {response}")
+                await asyncio.sleep(0.05)
+            else:
+                raise TimeoutError(f"BDS did not acknowledge platform construction: {server.snapshot(offset)}")
+            traces["platform_confirmation"] = [v for v in server.snapshot(offset) if "filled" in v.lower()]
             origin = await reset()
             traces["platform_start"] = origin
 
@@ -182,23 +200,31 @@ async def exercise_motion(server, results, transport):
             stopped = await run_phase("stop_z", 24, start=first["pred"])
             await asyncio.sleep(0.25)
             stopped["settled_bds"] = await sample(stopped)
+            assert abs(first["samples"][-1]["bds"][1] - 101.62001) < 0.25, "Flat walk fell through platform"
+            assert abs(stopped["samples"][-1]["bds"][1] - 101.62001) < 0.25, "Stopping test fell through platform"
 
             origin = await reset()
-            await run_phase("yaw_90_forward", 38, (-0.09, 0, 0), (0, 1), yaw=90, start=origin)
+            turn = await run_phase("yaw_90_forward", 38, (-0.09, 0, 0), (0, 1), yaw=90, start=origin)
+            assert abs(turn["samples"][-1]["bds"][1] - 101.62001) < 0.25, "Turn fell through platform"
 
             origin = await reset()
-            await run_phase("move_only", 38, (0, 0, 0), (0, 1), start=origin)
+            moved = await run_phase("move_only", 38, (0, 0, 0), (0, 1), start=origin)
+            assert abs(moved["samples"][-1]["bds"][1] - 101.62001) < 0.25, "Move-only test fell through platform"
 
             origin = await reset()
             jump = await run_phase("jump", 42, (0, 0, 0), (0, 0), start=origin, sample_gap=0.045)
             jump["apex_y"] = max(p["bds"][1] for p in jump["samples"])
             jump["rise"] = round(jump["apex_y"] - origin[1], 6)
+            assert jump["rise"] > 0.2, f"Server never confirmed real jump: {jump['rise']}"
 
             origin = await reset()
             server.command("fill -2 100 4 2 102 4 stone")
             await asyncio.sleep(0.2)
             wall = await run_phase("solid_wall_z4", 74, (0, 0, 0.09), (0, 1), start=origin)
             wall["wall_plane_z"] = 4
+            wall["max_bds_z"] = max(v["bds"][2] for v in wall["samples"])
+            assert abs(wall["samples"][-1]["bds"][1] - 101.62001) < 0.25, "Collision test fell through platform"
+            assert wall["max_bds_z"] < 3.8, f"BDS reported passing through solid wall: {wall['max_bds_z']}"
             server.command("fill -2 100 4 2 102 4 air")
 
             origin = await reset()
