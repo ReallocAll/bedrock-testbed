@@ -43,7 +43,7 @@ async def observe(server, results, transport):
                     "block_properties_count": len(p.block_properties),
                     "server_version": p.server_version,
                 })
-            elif pid == 58 and len(chunks) < 100:
+            elif pid == 58 and (len(chunks) < 100 or (p.pos.x, p.pos.z) in ((0, 0), (1, 0), (-1, 0))):
                 item = {
                     "x": p.pos.x, "z": p.pos.z, "dim": int(p.dimension_id),
                     "sub_chunks_count": int(p.sub_chunks_count),
@@ -109,6 +109,9 @@ async def observe(server, results, transport):
         server.command("setblock 16 220 0 stone")
         server.command("setblock -1 220 0 stone")
         await asyncio.sleep(3)
+        for cx in (0, 1, -1):
+            bot.request_sub_chunks(0, cx, 0, [13, 14])
+        await asyncio.sleep(3)
         probes = [
             ("stone", "0 220 0", "WORLD_ORACLE_STONE"),
             ("glass", "1 220 0", "WORLD_ORACLE_GLASS"),
@@ -130,7 +133,9 @@ async def observe(server, results, transport):
             "oracle": oracle,
             "observer_errors": errors,
             "status": "PASS" if (
-                chunks and subchunks and all(oracle.values()) and
+                chunks and subchunks and any(
+                    e["result"] == 0 for item in subchunks for e in item["entries"]
+                ) and all(oracle.values()) and
                 any(u.get("pos") == [0, 220, 0] for u in updates)
                 and not errors
             ) else "INCOMPLETE",
