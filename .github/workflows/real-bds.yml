@@ -29,7 +29,7 @@ jobs:
         transport: [raknet, nethernet]
     timeout-minutes: 30
     env:
-      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || (github.ref_name == 'test/navigation-frontier-20261101' && '18e8f432fe4a82812440a6aab519730cb584c26d') || '603aee40b2dfbabc3ee932dab3b8ebb97fe0ec1d' }}
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || (github.ref_name == 'test/navigation-frontier-20261101' && '75eab48713a8729b95dbee01540800dde6021be4') || '603aee40b2dfbabc3ee932dab3b8ebb97fe0ec1d' }}
     steps:
       - uses: actions/checkout@v4
         with:
