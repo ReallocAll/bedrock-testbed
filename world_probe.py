@@ -123,8 +123,19 @@ async def observe(server, results, transport):
         for cx in (0, 1, -1):
             bot.request_sub_chunks(0, cx, 0, [13, 14])
         await asyncio.sleep(5)
+        assert world.block(0, 220, 0) is not None and world.block(0, 220, 0).air, (
+            "Initial SubChunk SUCCESS_ALL_AIR not represented as known air"
+        )
         server.command("setblock 0 220 0 diamond_block")
-        await asyncio.sleep(1)
+        deadline = loop.time() + 10
+        while loop.time() < deadline and (
+            world.block(0, 220, 0) is None or world.block(0, 220, 0).name != "minecraft:diamond_block"
+        ):
+            await asyncio.sleep(0.1)
+        assert world.block(0, 220, 0) is not None
+        assert world.block(0, 220, 0).name == "minecraft:diamond_block", (
+            "UpdateBlock did not modify observed all-air SubChunk"
+        )
         server.command("setblock 0 220 0 stone")
         server.command("setblock 1 220 0 glass")
         server.command("setblock 16 220 0 stone")
@@ -133,6 +144,18 @@ async def observe(server, results, transport):
         await asyncio.sleep(0.3)
         server.command("setblock 0 222 0 air")
         await asyncio.sleep(3)
+        for pos, name in {
+            (0, 220, 0): "minecraft:stone",
+            (1, 220, 0): "minecraft:glass",
+            (16, 220, 0): "minecraft:stone",
+            (-1, 220, 0): "minecraft:stone",
+            (0, 222, 0): "minecraft:air",
+        }.items():
+            block = world.block(*pos)
+            assert block is not None and block.name == name, (
+                f"Incremental UpdateBlock mismatched before SubChunk refresh: {pos}: {block}"
+            )
+        results["incremental_updates_before_snapshot"] = True
         for cx in (0, 1, -1):
             bot.request_sub_chunks(0, cx, 0, [13, 14])
         await asyncio.sleep(3)
@@ -193,7 +216,8 @@ async def observe(server, results, transport):
         })
         assert results["initial_status"] == "PASS", "world data/oracle checks incomplete"
         print("WORLD_SUMMARY " + json.dumps({
-            "status": results["status"], "start_game": start_game, "counts": dict(counts),
+            "status": results["initial_status"], "start_game": start_game, "counts": dict(counts),
+            "incremental_updates_before_snapshot": results["incremental_updates_before_snapshot"],
             "chunk_examples": [{k: v for k, v in c.items() if k != "raw"} for c in chunks[:10]],
             "subchunk_examples": [
                 {"center": c["center"], "entries": [
@@ -255,6 +279,7 @@ async def observe(server, results, transport):
             "reloaded_after_return": results["reloaded_world_after_dimension_return"],
             "publisher_invalidated": results["publisher_invalidated"],
             "reconnect_invalidated": results["reconnect_invalidated"],
+            "incremental_updates_before_snapshot": results["incremental_updates_before_snapshot"],
             "decode_samples": decode_samples,
         }), flush=True)
 
