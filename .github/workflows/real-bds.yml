@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   endpilot:
-    if: github.actor == 'ReallocAll'
+    if: github.actor == 'ReallocAll' && github.ref_name != 'test/chunk-operability-a1b-20261101'
     name: EndPilot (${{ matrix.suite }}, ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
@@ -126,5 +126,77 @@ jobs:
             work/bds.log
             work/server/version.txt
             work/server/server.properties
+          if-no-files-found: warn
+          retention-days: 14
+
+  a1b:
+    if: >-
+      github.actor == 'ReallocAll' &&
+      github.event_name == 'push' &&
+      github.ref_name == 'test/chunk-operability-a1b-20261101' &&
+      github.event.before == '0000000000000000000000000000000000000000' &&
+      github.event.after == github.sha &&
+      github.event.head_commit.message == 'test(a1b): bounded fixed-world four-condition experiment [A1b-20261101]'
+    name: A1b fixed-world four-condition BDS
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Prepare exact Endstone and A1 observer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv-server
+          .venv-server/bin/python -m pip install 'endstone==0.11.14'
+          mkdir -p .chunkop-wheel
+          .venv-server/bin/python -m pip wheel --no-deps --wheel-dir .chunkop-wheel diagnostics/endstone_chunk_observer
+      - name: Get pinned pure protocol wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: python-pure
+          repository: ReallocAll/bedrock-protocol
+          run-id: 41009758882
+          github-token: ${{ secrets.REPO_DEVELOP }}
+          path: dependencies/pure
+      - name: Get pinned Linux native protocol wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: python-native-Linux
+          repository: ReallocAll/bedrock-protocol
+          run-id: 41009758882
+          github-token: ${{ secrets.REPO_DEVELOP }}
+          path: dependencies/native
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run unique A1b four-condition lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ github.event.head_commit.id }}" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          python -m venv .venv-client
+          .venv-client/bin/python -m pip install dependencies/pure/*.whl dependencies/native/*.whl \
+            'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a'
+          .venv-client/bin/python -m pip check
+          mapfile -t wheels < <(find .chunkop-wheel -maxdepth 1 -type f -name 'endstone_chunk_observer-*.whl')
+          test "${#wheels[@]}" -eq 1
+          .venv-client/bin/python chunk_operability_a1b_probe.py \
+            --server-python .venv-server/bin/python \
+            --endpilot-commit 1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a \
+            --plugin-wheel "${wheels[0]}"
+      - name: Upload A1b evidence on success or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chunk-operability-a1b-20261101
+          path: |
+            work/a1b/**
+            work/result.json
           if-no-files-found: warn
           retention-days: 14
