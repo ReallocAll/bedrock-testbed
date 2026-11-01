@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "endstone-chunk-observer"
+version = "0.1.0"
+description = "Test-only read-only loaded chunk snapshot command for Endstone 0.11"
+requires-python = ">=3.13"
+
+[project.entry-points."endstone"]
+chunk-observer = "endstone_chunk_observer:ChunkObserverPlugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]

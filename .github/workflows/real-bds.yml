@@ -42,6 +42,12 @@ jobs:
         run: |
           python -m venv .venv-server
           .venv-server/bin/python -m pip install 'endstone==0.11.14'
+      - name: Build test-only Endstone chunk observer
+        if: github.ref_name == 'test/chunk-operability-20261101'
+        run: |
+          set -euo pipefail
+          mkdir -p .chunkop-wheel
+          .venv-server/bin/python -m pip wheel --no-deps --wheel-dir .chunkop-wheel diagnostics/endstone_chunk_observer
       - name: Get pinned protocol compiler wheel
         uses: actions/download-artifact@v4
         with:
@@ -81,6 +87,17 @@ jobs:
             .venv-client/bin/python navigation_probe.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
           elif [[ "${{ matrix.suite }}" == "smoke" ]]; then
             .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
+          elif [[ "${{ github.ref_name }}" == "test/chunk-operability-20261101" ]]; then
+            mapfile -t observer_wheels < <(find .chunkop-wheel -maxdepth 1 -type f -name 'endstone_chunk_observer-*.whl')
+            if [[ "${#observer_wheels[@]}" -ne 1 ]]; then
+              echo "::error::Expected exactly one test observer wheel, found ${#observer_wheels[@]}"
+              exit 1
+            fi
+            .venv-client/bin/python chunk_operability_probe.py \
+              --server-python .venv-server/bin/python \
+              --endpilot-commit "$ENDPILOT_COMMIT" \
+              --transport "${{ matrix.transport }}" \
+              --plugin-wheel "${observer_wheels[0]}"
           elif [[ "${{ github.ref_name }}" == test/world-data-* ]]; then
             .venv-client/bin/python world_probe.py --server-python .venv-server/bin/python --transport "${{ matrix.transport }}"
           elif [[ "${{ github.ref_name }}" == test/navigation-* ]]; then
@@ -98,9 +115,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-bds-endpilot-${{ matrix.transport }}${{ matrix.suite == 'navigation' && '-navigation' || '' }}
+          name: real-bds-endpilot-${{ matrix.transport }}${{ github.ref_name == 'test/chunk-operability-20261101' && '-chunk-operability' || matrix.suite == 'navigation' && '-navigation' || '' }}
           path: |
             work/result.json
+            work/chunk_operability.json
             work/world_probe.json
             work/motion_trajectory.json
             work/controller_trajectory.json
