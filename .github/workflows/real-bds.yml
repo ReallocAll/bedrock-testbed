@@ -9,7 +9,7 @@ on:
         description: 'Exact EndPilot commit SHA (40 lowercase hex characters)'
         required: false
         type: string
-        default: '603aee40b2dfbabc3ee932dab3b8ebb97fe0ec1d'
+        default: '1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a'
 
 permissions:
   contents: read
@@ -21,15 +21,16 @@ concurrency:
 jobs:
   endpilot:
     if: github.actor == 'ReallocAll'
-    name: EndPilot (${{ matrix.transport }})
+    name: EndPilot (${{ matrix.suite }}, ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         transport: [raknet, nethernet]
+        suite: ${{ fromJSON((github.ref_name == 'main' || github.ref_name == 'test/navigation-frontier-20261101') && '["smoke","navigation"]' || '["branch"]') }}
     timeout-minutes: 30
     env:
-      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || (github.ref_name == 'test/navigation-frontier-20261101' && '75eab48713a8729b95dbee01540800dde6021be4') || '603aee40b2dfbabc3ee932dab3b8ebb97fe0ec1d' }}
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -76,7 +77,11 @@ jobs:
       - name: Exercise public Typed Packet API against fresh real BDS
         shell: bash
         run: |
-          if [[ "${{ github.ref_name }}" == test/world-data-* ]]; then
+          if [[ "${{ matrix.suite }}" == "navigation" ]]; then
+            .venv-client/bin/python navigation_probe.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
+          elif [[ "${{ matrix.suite }}" == "smoke" ]]; then
+            .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
+          elif [[ "${{ github.ref_name }}" == test/world-data-* ]]; then
             .venv-client/bin/python world_probe.py --server-python .venv-server/bin/python --transport "${{ matrix.transport }}"
           elif [[ "${{ github.ref_name }}" == test/navigation-* ]]; then
             .venv-client/bin/python navigation_probe.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
@@ -93,7 +98,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-bds-endpilot-${{ matrix.transport }}
+          name: real-bds-endpilot-${{ matrix.transport }}${{ matrix.suite == 'navigation' && '-navigation' || '' }}
           path: |
             work/result.json
             work/world_probe.json
