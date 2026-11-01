@@ -36,6 +36,12 @@ MAX_PACKET_EVENTS = 512
 MAX_PACKET_EVIDENCE_BYTES = 1024 * 1024
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_RESPONSE_CHARS = 8192
+SAFE_LANDING_COMMAND = "fill 0 99 0 0 99 0 minecraft:stone"
+SINGLE_POINT_TARGETS = tuple(
+    (chunk_x, chunk_z, 1 if chunk_x == 0 and block_z == 0 else chunk_x * 16, block_z)
+    for chunk_x in range(6)
+    for chunk_z, block_z in ((-1, -2), (0, 0))
+)
 SUCCESS_FILL = re.compile(r"\b(?P<count>\d+)\s+blocks?\s+filled\b", re.I)
 SUCCESS_SETBLOCK = re.compile(
     r"\b(?:block\s+(?:placed|set)|successfully\s+(?:placed|set)\s+block)\b", re.I
@@ -43,7 +49,7 @@ SUCCESS_SETBLOCK = re.compile(
 SUCCESS_TP = re.compile(r"\bTeleported\s+EndPilotTest\s+to\b", re.I)
 FAILURE_RESPONSE = re.compile(
     r"outside of the world|\bfailed\b|unknown command|syntax error|permission denied|"
-    r"not allowed|too many blocks|no targets matched",
+    r"not allowed|too many blocks|no targets matched|(?:could not|couldn't)\s+be placed",
     re.I,
 )
 SNAPSHOT_COMMAND_REJECTION = re.compile(r"\bsyntax error\b|\bunknown command\b", re.I)
@@ -105,12 +111,14 @@ def remaining(deadline: float) -> float:
     return value
 
 
-def write_json(path: Path | str, data: dict) -> None:
+def write_json(path: Path | str, data: dict) -> bool:
     path = Path(path)
     if not path.is_absolute():
         path = ROOT / path
     encoded = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
+    compacted = False
     if len(encoded) > MAX_JSON_BYTES:
+        compacted = True
         data["status"] = "BLOCKED"
         data["conclusion"] = "DIAGNOSTIC_EXECUTION_BLOCKED"
         data["error"] = "structured_diagnostic_json_exceeded_2MiB_evidence_compacted"
@@ -132,6 +140,16 @@ def write_json(path: Path | str, data: dict) -> None:
                     "authoritative_positions": len(data.get("authoritative_positions", [])),
                 },
                 "evidence_omitted_due_to_budget": True,
+                "safety_gate": {"status": "UNVERIFIED", "reason": "evidence_compacted"},
+                "safety_validation": {
+                    "status": "FAIL",
+                    "error": "safety_evidence_omitted_due_to_budget",
+                },
+                "ci_validation": {
+                    "status": "FAIL",
+                    "exit_code": 1,
+                    "reason": "diagnostic_artifact_compacted",
+                },
                 "output_path": "work/chunk_operability.json",
             },
             separators=(",", ":"),
@@ -141,6 +159,7 @@ def write_json(path: Path | str, data: dict) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_bytes(encoded)
     temporary.replace(path)
+    return compacted
 
 
 def ensure_json_size(data: dict) -> None:
@@ -189,13 +208,218 @@ def command_response(lines: list[str], kind: str) -> str:
     text = "\n".join(lines)
     if FAILURE_RESPONSE.search(text):
         return "failure"
-    if kind == "fill" and SUCCESS_FILL.search(text):
-        return "success"
+    if kind == "fill":
+        fill_match = SUCCESS_FILL.search(text)
+        if fill_match:
+            return "no_change" if int(fill_match.group("count")) == 0 else "success"
     if kind == "setblock" and SUCCESS_SETBLOCK.search(text):
         return "success"
     if kind == "tp" and SUCCESS_TP.search(text):
         return "success"
     return "pending"
+
+
+def safe_landing_gate(landing: dict) -> dict:
+    count = landing.get("reported_block_count")
+    allowed = landing.get("status") == "success" and type(count) is int and count == 1
+    if allowed:
+        reason = "exactly_one_block_filled"
+    elif landing.get("status") != "success":
+        reason = f"landing_command_{landing.get('status', 'unknown')}_not_confirmed"
+    else:
+        reason = "landing_fill_count_not_exactly_one"
+    return {
+        "status": "ALLOW" if allowed else "BLOCKED",
+        "reason": reason,
+        "reported_block_count": count,
+        "teleport_permitted": allowed,
+    }
+
+
+def validate_safety(diagnostics: dict) -> dict:
+    def failed(reason: str) -> dict:
+        return {"status": "FAIL", "error": reason}
+
+    def matching_command(event: dict, phase: str, kind: str, command: str) -> dict | None:
+        if not isinstance(event, dict) or type(event.get("sequence")) is not int:
+            return None
+        rows = [row for row in command_rows if row.get("sequence") == event["sequence"]]
+        if len(rows) != 1:
+            return None
+        row = rows[0]
+        raw_lines = row.get("raw_lines")
+        if any((
+            row.get("phase") != phase,
+            row.get("kind") != kind,
+            row.get("command") != command,
+            row.get("status") != event.get("status"),
+            row.get("reported_block_count") != event.get("reported_block_count"),
+            not isinstance(row.get("raw_text"), str),
+            row.get("raw_text") != event.get("raw_text"),
+            not isinstance(raw_lines, list),
+            any(not isinstance(line, str) for line in raw_lines or []),
+            raw_lines != event.get("raw_lines"),
+        )):
+            return None
+        parsed = command_response(raw_lines, kind)
+        if kind == "fill":
+            count_match = SUCCESS_FILL.search("\n".join(raw_lines))
+            raw_count = int(count_match.group("count")) if count_match else None
+            if row.get("reported_block_count") != raw_count:
+                return None
+            successful_count = raw_count if row["status"] == "success" else None
+            if row.get("successful_block_count") != successful_count:
+                return None
+        if row["status"] in {"success", "failure", "no_change"}:
+            if parsed != row["status"]:
+                return None
+        elif row["status"] in {"timeout", "server_stopped"}:
+            if parsed != "pending":
+                return None
+        else:
+            return None
+        return row
+
+    landing = diagnostics.get("safe_landing")
+    recorded_gate = diagnostics.get("safety_gate")
+    command_rows = diagnostics.get("commands")
+    if not isinstance(landing, dict) or not isinstance(recorded_gate, dict):
+        return failed("safe_landing_gate_evidence_missing")
+    if not isinstance(command_rows, list) or any(not isinstance(row, dict) for row in command_rows):
+        return failed("command_evidence_missing_or_invalid")
+
+    expected_gate = safe_landing_gate(landing)
+    if any(recorded_gate.get(key) != value for key, value in expected_gate.items()):
+        return failed("safe_landing_gate_evidence_mismatch")
+    landing_row = matching_command(landing, "safe_landing_block", "fill", SAFE_LANDING_COMMAND)
+    if landing_row is None:
+        return failed("safe_landing_command_evidence_missing_or_mismatched")
+    if any(type(row.get("sequence")) is not int for row in command_rows):
+        return failed("world_mutation_sequence_missing")
+    if len({row["sequence"] for row in command_rows}) != len(command_rows):
+        return failed("duplicate_world_mutation_sequence")
+    if any(row["sequence"] < landing_row["sequence"] for row in command_rows):
+        return failed("world_mutation_before_safe_landing_gate")
+    later_commands = [row for row in command_rows if row["sequence"] > landing_row["sequence"]]
+
+    if expected_gate["status"] == "BLOCKED":
+        teleport = diagnostics.get("teleport", {})
+        if not isinstance(teleport, dict):
+            return failed("blocked_gate_teleport_skip_evidence_missing")
+        if teleport.get("status") != "skipped_safe_landing_not_confirmed":
+            return failed("teleport_not_marked_skipped_after_blocked_gate")
+        if teleport.get("reason") != expected_gate["reason"] or teleport.get("bds_horizontal_movement") != 0:
+            return failed("blocked_gate_teleport_skip_evidence_mismatch")
+        if later_commands:
+            return failed("world_mutation_after_blocked_safe_landing_gate")
+        return {
+            "status": "PASS",
+            "checks": [
+                "safe_landing_gate_blocked_without_exactly_one_block",
+                "teleport_skipped",
+                "no_later_world_mutations",
+            ],
+        }
+
+    teleport = diagnostics.get("teleport")
+    teleport_row = matching_command(
+        teleport, "conditional_teleport", "tp", f"tp {PLAYER} 0.5 100 0.5"
+    )
+    if teleport_row is None or len(later_commands) < 2:
+        return failed("teleport_or_following_command_evidence_missing")
+    if teleport_row["sequence"] <= landing_row["sequence"]:
+        return failed("teleport_before_safe_landing_gate")
+    if teleport_row["status"] != "success":
+        return failed("post_gate_command_after_unconfirmed_teleport")
+
+    full_fill = diagnostics.get("full_fill")
+    full_row = matching_command(
+        full_fill,
+        "full_fixed_corridor_fill",
+        "fill",
+        "fill 0 99 -2 80 99 2 minecraft:stone",
+    )
+    if full_row is None or full_row["sequence"] <= teleport_row["sequence"]:
+        return failed("full_fill_command_evidence_missing_or_mismatched")
+
+    point_rows = [row for row in later_commands if row.get("phase") == "single_point_diagnostic"]
+    points = diagnostics.get("single_point_diagnostics", [])
+    if not isinstance(points, list) or len(points) != len(point_rows) or len(points) > MAX_SINGLE_POINTS:
+        return failed("single_point_command_evidence_count_mismatch")
+    point_sequences = [point.get("sequence") for point in points if isinstance(point, dict)]
+    if len(point_sequences) != len(points) or len(set(point_sequences)) != len(point_rows):
+        return failed("single_point_command_sequence_mismatch")
+    if set(point_sequences) != {row["sequence"] for row in point_rows}:
+        return failed("single_point_command_sequence_mismatch")
+    for point, (chunk_x, chunk_z, block_x, block_z) in zip(points, SINGLE_POINT_TARGETS):
+        expected_command = f"setblock {block_x} 99 {block_z} minecraft:stone"
+        expected_target = {"x": block_x, "y": 99, "z": block_z}
+        if (
+            point.get("target_chunk") != [chunk_x, chunk_z]
+            or point.get("target_block") != [block_x, 99, block_z]
+            or point.get("target") != expected_target
+            or point.get("command") != expected_command
+            or matching_command(
+                point, "single_point_diagnostic", "setblock", expected_command
+            ) is None
+        ):
+            return failed("single_point_command_evidence_missing_or_mismatched")
+    if points and (
+        full_row["status"] != "failure"
+        or any(point["sequence"] <= full_row["sequence"] for point in points)
+    ):
+        return failed("single_point_diagnostics_without_explicit_full_fill_failure")
+    if len(later_commands) != 2 + len(points):
+        return failed("unauthorized_world_mutation_after_allowed_gate")
+    return {
+        "status": "PASS",
+        "checks": [
+            "safe_landing_gate_allowed_exactly_one_block",
+            "teleport_and_fill_command_evidence_matched",
+            "post_gate_world_mutations_match_fixed_workflow",
+        ],
+    }
+
+
+def cleanup_confirmed(diagnostics: dict) -> bool:
+    cleanup = diagnostics.get("cleanup", {})
+    body_error = cleanup.get("runtime_context_body_error")
+    expected_safe_block = (
+        diagnostics.get("conclusion") == "SAFE_LANDING_NOT_CONFIRMED"
+        and isinstance(body_error, str)
+        and body_error.startswith("DiagnosticBlocked: safe_landing_not_confirmed;")
+    )
+    runtime_closed = (
+        cleanup.get("runtime_context_entered") is True
+        and cleanup.get("runtime_context_exit_invoked") is True
+        and cleanup.get("runtime_context_closed") is True
+        and cleanup.get("runtime_context_exit_status") == "completed"
+        and cleanup.get("runtime_context_enter_error") is None
+        and cleanup.get("runtime_context_exit_error") is None
+        and (body_error is None or expected_safe_block)
+    )
+    observer_closed = (
+        "plugin_install" in diagnostics
+        and cleanup.get("observer_disable_hook_observed") is True
+    )
+    return cleanup.get("bds_graceful_stop") is True and runtime_closed and observer_closed
+
+
+def ci_exit_code(result: dict, diagnostics: dict) -> int:
+    safety = diagnostics.get("safety_validation", {})
+    safe_experiment_outcome = (
+        diagnostics.get("status") == "PASS" and result.get("status") == "PASS"
+    ) or (
+        diagnostics.get("status") == "BLOCKED"
+        and diagnostics.get("conclusion") == "SAFE_LANDING_NOT_CONFIRMED"
+        and diagnostics.get("failure_class") == "SAFE_LANDING_NOT_CONFIRMED"
+        and result.get("status") == "BLOCKED"
+    )
+    return 0 if (
+        safety.get("status") == "PASS"
+        and safe_experiment_outcome
+        and cleanup_confirmed(diagnostics)
+    ) else 1
 
 
 def capture_command_output(lines: list[str]) -> dict:
@@ -243,7 +467,11 @@ async def wait_for_command(
     }
     success_count = SUCCESS_FILL.search("\n".join(lines)) if kind == "fill" else None
     if kind == "fill":
-        row["successful_block_count"] = int(success_count.group("count")) if success_count else None
+        reported_count = int(success_count.group("count")) if success_count else None
+        row["reported_block_count"] = reported_count
+        row["successful_block_count"] = (
+            reported_count if reported_count is not None and status == "success" else None
+        )
     diagnostics["commands"].append(row)
     ensure_json_size(diagnostics)
     return row
@@ -539,7 +767,7 @@ async def run_diagnostic(server: Server, diagnostics: dict, transport: str, dead
 
         landing = await wait_for_command(
             server,
-            "fill 0 99 0 0 99 0 minecraft:stone",
+            SAFE_LANDING_COMMAND,
             "fill",
             "safe_landing_block",
             deadline,
@@ -548,12 +776,20 @@ async def run_diagnostic(server: Server, diagnostics: dict, transport: str, dead
             target={"x": [0, 0], "y": [99, 99], "z": [0, 0]},
         )
         diagnostics["safe_landing"] = landing
+        gate = safe_landing_gate(landing)
+        diagnostics["safety_gate"] = gate
+        if gate["status"] == "BLOCKED":
+            diagnostics["teleport"] = {
+                "status": "skipped_safe_landing_not_confirmed",
+                "reason": gate["reason"],
+                "bds_horizontal_movement": 0,
+            }
         post_landing = await request_snapshot(server, "after_safe_landing", deadline, diagnostics)
         landing["post_snapshot_id"] = post_landing["snapshot_id"]
         annotate_snapshot_delta(landing, post_landing, diagnostics)
 
         post_tp = post_landing
-        if landing["status"] == "success":
+        if gate["status"] == "ALLOW":
             tp = await wait_for_command(
                 server,
                 f"tp {PLAYER} 0.5 100 0.5",
@@ -597,13 +833,9 @@ async def run_diagnostic(server: Server, diagnostics: dict, transport: str, dead
             }
             diagnostics["checks"].append("conditional_teleport_authority_confirmed")
         else:
-            diagnostics["teleport"] = {
-                "status": "skipped_safe_landing_not_confirmed",
-                "reason": landing["status"],
-                "bds_horizontal_movement": 0,
-            }
             raise DiagnosticBlocked(
-                f"safe_landing_not_confirmed;_later_stages_skipped:{landing['status']}"
+                f"safe_landing_not_confirmed;_later_stages_skipped:{gate['reason']}",
+                failure_class="SAFE_LANDING_NOT_CONFIRMED",
             )
 
         full_fill = await wait_for_command(
@@ -623,43 +855,35 @@ async def run_diagnostic(server: Server, diagnostics: dict, transport: str, dead
 
         single_points = []
         if full_fill["status"] == "failure":
-            for chunk_x in range(6):
-                for chunk_z, block_z in ((-1, -2), (0, 0)):
-                    remaining(deadline)
-                    pre_snapshot_id = diagnostics["snapshots"][-1]["snapshot_id"]
-                    block_x = chunk_x * 16
-                    if (block_x, block_z) == (0, 0):
-                        block_x = 1
-                    command = f"setblock {block_x} 99 {block_z} minecraft:stone"
-                    outcome = await wait_for_command(
-                        server,
-                        command,
-                        "setblock",
-                        "single_point_diagnostic",
-                        deadline,
-                        pre_snapshot_id,
-                        diagnostics,
-                        timeout=4.0,
-                        target={"x": block_x, "y": 99, "z": block_z},
-                    )
-                    outcome["target_chunk"] = [chunk_x, chunk_z]
-                    outcome["target_block"] = [block_x, 99, block_z]
-                    post_point = await request_snapshot(
-                        server,
-                        f"after_single_point_{chunk_x}_{chunk_z}",
-                        deadline,
-                        diagnostics,
-                    )
-                    outcome["post_snapshot_id"] = post_point["snapshot_id"]
-                    annotate_snapshot_delta(outcome, post_point, diagnostics)
-                    single_points.append(outcome)
-                    diagnostics["single_point_diagnostics"] = single_points
-                    write_json(diagnostics["output_path"], diagnostics)
-                    if outcome["status"] in ("timeout", "server_stopped"):
-                        break
-                if len(single_points) >= MAX_SINGLE_POINTS or (
-                    single_points and single_points[-1]["status"] in ("timeout", "server_stopped")
-                ):
+            for chunk_x, chunk_z, block_x, block_z in SINGLE_POINT_TARGETS[:MAX_SINGLE_POINTS]:
+                remaining(deadline)
+                pre_snapshot_id = diagnostics["snapshots"][-1]["snapshot_id"]
+                command = f"setblock {block_x} 99 {block_z} minecraft:stone"
+                outcome = await wait_for_command(
+                    server,
+                    command,
+                    "setblock",
+                    "single_point_diagnostic",
+                    deadline,
+                    pre_snapshot_id,
+                    diagnostics,
+                    timeout=4.0,
+                    target={"x": block_x, "y": 99, "z": block_z},
+                )
+                outcome["target_chunk"] = [chunk_x, chunk_z]
+                outcome["target_block"] = [block_x, 99, block_z]
+                post_point = await request_snapshot(
+                    server,
+                    f"after_single_point_{chunk_x}_{chunk_z}",
+                    deadline,
+                    diagnostics,
+                )
+                outcome["post_snapshot_id"] = post_point["snapshot_id"]
+                annotate_snapshot_delta(outcome, post_point, diagnostics)
+                single_points.append(outcome)
+                diagnostics["single_point_diagnostics"] = single_points
+                write_json(diagnostics["output_path"], diagnostics)
+                if outcome["status"] in ("timeout", "server_stopped"):
                     break
         diagnostics["single_point_diagnostics"] = single_points
 
@@ -678,7 +902,12 @@ async def run_diagnostic(server: Server, diagnostics: dict, transport: str, dead
 
 
 def classify(diagnostics: dict) -> tuple[str, str, list[str]]:
-    landing = diagnostics.get("safe_landing", {}).get("status")
+    if validate_safety(diagnostics).get("status") != "PASS":
+        return "BLOCKED", "SAFETY_EVIDENCE_UNVERIFIED", []
+    gate = diagnostics.get("safety_gate")
+    if gate["status"] != "ALLOW":
+        return "BLOCKED", "SAFE_LANDING_NOT_CONFIRMED", []
+
     full = diagnostics.get("full_fill", {}).get("status")
     snapshots = diagnostics.get("snapshots", [])
     if not snapshots or any(row.get("plugin_status") != "ok" for row in snapshots):
@@ -688,6 +917,10 @@ def classify(diagnostics: dict) -> tuple[str, str, list[str]]:
     if full == "success":
         return "PASS", "SCENE_COMMAND_OPERABLE_OBSERVED", labels
     if full in ("timeout", "server_stopped", None):
+        return "BLOCKED", "DIAGNOSTIC_EXECUTION_BLOCKED", labels
+    if full == "no_change":
+        return "BLOCKED", "FULL_FILL_NO_CHANGE", labels
+    if full != "failure":
         return "BLOCKED", "DIAGNOSTIC_EXECUTION_BLOCKED", labels
 
     before_fill_id = diagnostics.get("full_fill", {}).get("pre_snapshot_id")
@@ -699,7 +932,7 @@ def classify(diagnostics: dict) -> tuple[str, str, list[str]]:
         labels.append("LOADED_BUT_FILL_REJECTED")
 
     points = diagnostics.get("single_point_diagnostics", [])
-    if landing == "success" or any(row.get("status") == "success" for row in points):
+    if any(row.get("status") == "success" for row in points):
         labels.append("SINGLE_POINT_AND_RANGE_DIVERGENCE")
     if not labels:
         return "FAIL", "INCONCLUSIVE", labels
@@ -766,6 +999,9 @@ def make_diagnostics(args, plugin_meta: dict, installed_commit: str | None) -> d
         "checks": [],
         "snapshots": [],
         "commands": [],
+        "safety_gate": None,
+        "safety_validation": {"status": "NOT_RUN", "checks": []},
+        "ci_validation": {"status": "NOT_RUN", "exit_code": 1},
         "authoritative_positions": [],
         "single_point_diagnostics": [],
         "observer_cleanup": {
@@ -891,16 +1127,19 @@ def main() -> int:
             diagnostics["failure_class"] = failure_class
             result["failure_class"] = failure_class
         error_text = str(error).lower()
-        diagnostics["conclusion"] = (
-            "LOAD_STATE_UNVERIFIED"
-            if failure_class in {
-                "COMMAND_REGISTRATION_FAILED",
-                "SNAPSHOT_SCHEDULER_FAILED",
-                "SERVER_LOAD_STATE_READ_FAILED",
-                "SNAPSHOT_CALLBACK_FAILED",
-            } or "loaded_chunks" in error_text or "observer_plugin_ready_marker_missing" in error_text
-            else "DIAGNOSTIC_EXECUTION_BLOCKED"
-        )
+        if failure_class == "SAFE_LANDING_NOT_CONFIRMED":
+            diagnostics["conclusion"] = "SAFE_LANDING_NOT_CONFIRMED"
+        else:
+            diagnostics["conclusion"] = (
+                "LOAD_STATE_UNVERIFIED"
+                if failure_class in {
+                    "COMMAND_REGISTRATION_FAILED",
+                    "SNAPSHOT_SCHEDULER_FAILED",
+                    "SERVER_LOAD_STATE_READ_FAILED",
+                    "SNAPSHOT_CALLBACK_FAILED",
+                } or "loaded_chunks" in error_text or "observer_plugin_ready_marker_missing" in error_text
+                else "DIAGNOSTIC_EXECUTION_BLOCKED"
+            )
         diagnostics["error"] = (
             diagnostics["cleanup"].get("runtime_context_body_error") or exception_text(error)
         )
@@ -942,10 +1181,6 @@ def main() -> int:
                     diagnostics["conclusion"] = "DIAGNOSTIC_EXECUTION_BLOCKED"
                     diagnostics["cleanup"]["bds_graceful_stop"] = False
                     diagnostics["cleanup"]["bds_stop_error"] = result["cleanup_error"]
-        if diagnostics is not None:
-            diagnostics["finished_at_utc"] = diagnostics.get("finished_at_utc") or utc_now()
-            diagnostics["budget"]["snapshots_used"] = len(diagnostics["snapshots"])
-            write_json(diagnostics_path, diagnostics)
         result["timestamp_finished"] = utc_now()
         result["checks"] = list(dict.fromkeys(result.get("checks", [])))
         result["snapshot_count"] = len(diagnostics["snapshots"]) if diagnostics is not None else 0
@@ -960,9 +1195,39 @@ def main() -> int:
             diagnostics.get("conclusion", result["diagnostic_conclusion"])
             if diagnostics is not None else result["diagnostic_conclusion"]
         )
+        if diagnostics is not None:
+            diagnostics["finished_at_utc"] = diagnostics.get("finished_at_utc") or utc_now()
+            diagnostics["budget"]["snapshots_used"] = len(diagnostics["snapshots"])
+            diagnostics["safety_validation"] = validate_safety(diagnostics)
+        result["safety_validation"] = (
+            diagnostics.get("safety_validation", {"status": "NOT_RUN", "checks": []})
+            if diagnostics is not None else {"status": "NOT_RUN", "checks": []}
+        )
+        result["safety_gate"] = diagnostics.get("safety_gate") if diagnostics is not None else None
+        exit_code = ci_exit_code(result, diagnostics) if diagnostics is not None else 1
+        result["ci_status"] = "PASS" if exit_code == 0 else "FAIL"
+        result["ci_exit_code"] = exit_code
+        if diagnostics is not None:
+            diagnostics["ci_validation"] = {
+                "status": result["ci_status"],
+                "exit_code": exit_code,
+                "cleanup_confirmed": cleanup_confirmed(diagnostics),
+            }
+            compacted = write_json(diagnostics_path, diagnostics)
+            if compacted:
+                exit_code = 1
+                result["status"] = diagnostics["status"]
+                result["diagnostic_conclusion"] = diagnostics["conclusion"]
+                result["safety_gate"] = {"status": "UNVERIFIED", "reason": "evidence_compacted"}
+                result["safety_validation"] = {
+                    "status": "FAIL",
+                    "error": "safety_evidence_omitted_due_to_budget",
+                }
+                result["ci_status"] = "FAIL"
+                result["ci_exit_code"] = exit_code
         write_json(result_path, result)
         print(json.dumps(result, ensure_ascii=False), flush=True)
-    return 0 if result["status"] == "PASS" else 1
+    return exit_code
 
 
 if __name__ == "__main__":
