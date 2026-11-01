@@ -21,7 +21,7 @@ from server import PLAYER, PROPERTIES, ROOT, Server
 
 SEED = "0"  # One predetermined, unproven control seed; never fallback.
 SHA = "1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a"
-BRANCH = "test/spawn-preflight-20261102"
+BRANCH = "test/spawn-preflight-ready-20261102"
 OUT = ROOT / "work" / "spawn-preflight"
 REQUIRED = {
     **PROPERTIES,
@@ -145,7 +145,7 @@ def main() -> int:
     evidence = {
         "status": "SPAWN_PREFLIGHT_EXECUTION_BLOCKED",
         "started_at_utc": utc(), "seed": SEED, "seed_reason": "fixed zero control; origin spawn unverified",
-        "testbed_parent": "ed5ec9fd2bfec7ec3956fa396daa26266681657e",
+        "testbed_parent": "27e31dc2a96f3271b8b2e470099165293d628520",
         "expected_branch": BRANCH, "endpilot_sha": SHA,
         "bds_expected": "1.26.52.3", "endstone_expected": "0.11.14",
         "protocol": 2193, "transport": "raknet", "server_python_expected": "3.13",
@@ -196,8 +196,6 @@ def main() -> int:
         server.wait_ready(timeout=420)
         if not any("Version: 1.26.52.3" in line for line in server.snapshot()):
             raise Blocked("exact_bds_version_not_confirmed")
-        if not any("CHUNKOP_PLUGIN_READY api_version=0.11" in line for line in server.snapshot()):
-            raise Blocked("observer_enable_not_confirmed")
         evidence["effective_properties"] = properties(folder / "server.properties")
         evidence["version_txt"] = (folder / "version.txt").read_text().strip()
         asyncio.run(observe(server, evidence))

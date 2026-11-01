@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   endpilot:
-    if: github.actor == 'ReallocAll' && github.ref_name != 'test/chunk-operability-a1b-20261101' && github.ref_name != 'test/spawn-preflight-20261102'
+    if: github.actor == 'ReallocAll' && github.ref_name != 'test/chunk-operability-a1b-20261101' && github.ref_name != 'test/spawn-preflight-20261102' && github.ref_name != 'test/spawn-preflight-ready-20261102'
     name: EndPilot (${{ matrix.suite }}, ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
@@ -205,12 +205,12 @@ jobs:
     if: >-
       github.actor == 'ReallocAll' &&
       github.event_name == 'push' &&
-      github.ref_name == 'test/spawn-preflight-20261102' &&
+      github.ref_name == 'test/spawn-preflight-ready-20261102' &&
       github.event.created == true &&
       github.event.before == '0000000000000000000000000000000000000000' &&
       github.event.after == github.sha &&
       github.event.head_commit.id == github.sha &&
-      github.event.head_commit.message == 'test(spawn): one-seed natural-spawn preflight [20261102]'
+      github.event.head_commit.message == 'test(spawn): fix observer readiness preflight [20261102]'
     name: Spawn preflight (single BDS, RakNet)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
