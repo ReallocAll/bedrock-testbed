@@ -11,8 +11,10 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 from datetime import datetime, timezone
+from itertools import islice
 
 import scenarios
 import testbed
@@ -382,10 +384,13 @@ async def exercise(server, results, transport):
                 "event_kind": "server_publisher_update",
                 **publisher,
                 "server_built_chunk_count": len(payload.server_built_chunks),
-                "server_built_chunks_sample": [
-                    [int(chunk.x), int(chunk.z)] for chunk in payload.server_built_chunks[:32]
-                ],
+                "server_built_chunks_sample": [],
+                "server_built_chunks_sample_truncated": len(payload.server_built_chunks) > 32,
             })
+            # SequenceView supports len() and iteration, but not Python slicing.
+            # Iterate at most 32 borrowed Native values and copy their coordinates.
+            for chunk in islice(iter(payload.server_built_chunks), 32):
+                row["server_built_chunks_sample"].append([int(chunk.x), int(chunk.z)])
         elif packet_id in (21, 110):
             position = payload.pos
             row.update({
@@ -469,30 +474,44 @@ async def exercise(server, results, transport):
                 state["observer_failure"] = True
                 if len(stream["observer_errors"]) < 32:
                     stream["observer_errors"].append(f"packet {event.packet.header.packet_id}: {type(error).__name__}: {error}")
-                budget["exhausted"] = True
-            if budget["exhausted"]:
+            if budget["exhausted"] or state["observer_failure"]:
                 event_ready.set()
                 if navigator is not None:
                     navigator.stop()
 
-    async def fill_floor() -> None:
-        command = "fill 0 99 -2 80 99 2 minecraft:stone"
-        for attempt in range(3):
-            require_time("safe floor preparation")
+    async def fill_floor() -> dict:
+        async def fill_and_confirm(command: str, expected_blocks: int, stage: str) -> None:
+            require_time(stage)
             offset = server.command(command)
             until = min(operation_deadline, loop.time() + 4.0)
             while loop.time() < until:
                 lines = server.snapshot(offset)
-                if any("blocks filled" in line.lower() or "block filled" in line.lower() for line in lines):
+                lowered = [line.lower() for line in lines]
+                if any("outside of the world" in line or "failed" in line or "no blocks were filled" in line for line in lowered):
+                    raise RuntimeError(f"{stage} failed: {lines[-8:]}")
+                if any(re.search(rf"\b{expected_blocks} blocks? filled\b", line) for line in lowered):
                     return
-                if any("outside of the world" in line.lower() or "failed" in line.lower() for line in lines):
-                    break
                 await asyncio.sleep(0.05)
-            lines = server.snapshot(offset)
-            if any("outside of the world" in line.lower() for line in lines) and attempt < 2:
-                await asyncio.sleep(0.5)
-                continue
-            raise RuntimeError(f"safe floor preparation was not acknowledged: {lines[-8:]}")
+            raise TimeoutError(f"{stage} was not acknowledged: {server.snapshot(offset)[-8:]}")
+
+        # Establish and acknowledge a landing block before moving the bot into
+        # the scene. Verify the teleport, then prepare the original bounded floor.
+        await fill_and_confirm("fill 0 99 0 0 99 0 minecraft:stone", 1, "safe landing block")
+        position = await wait_for_target_position("tp EndPilotTest 0.5 100 0.5")
+        await fill_and_confirm(
+            "fill 0 99 -2 80 99 2 minecraft:stone", 405, "safe floor preparation"
+        )
+        return position
+
+    async def wait_for_target_position(command: str) -> dict:
+        require_time("BDS scene teleport")
+        server.command(command)
+        position = await stable_authoritative_position()
+        if position["dimension"] != DIMENSION_OVERWORLD or math.dist(
+            position["position"], [0.5, 101.62001, 0.5]
+        ) > 0.25:
+            raise RuntimeError(f"BDS did not confirm the safe scene teleport: {position}")
+        return position
 
     async def authoritative_position(timeout: float = 5.0) -> dict:
         require_time("BDS querytarget")
@@ -658,7 +677,46 @@ async def exercise(server, results, transport):
         require_time("runtime initialization")
         from endpilot import Runtime
 
-        runtime = Runtime()
+        class ProbeRuntime(Runtime):
+            async def __aexit__(self, exc_type, exc, traceback):
+                cleanup_errors = []
+                status_error = None
+                if bot is not None:
+                    try:
+                        final_status = bot.get_status()
+                        stream["runtime_final_bot_state"] = str(final_status.state)
+                        stream["runtime_final_session_id"] = int(final_status.session_id)
+                        stream["runtime_final_dimension"] = int(final_status.dimension)
+                        stream["runtime_final_status_captured"] = True
+                    except Exception as error:
+                        status_error = error
+                        cleanup_errors.append(f"bot status: {type(error).__name__}: {error}")
+                if navigator is not None:
+                    try:
+                        navigator.stop()
+                        coast_deadline = min(operation_deadline, loop.time() + 1.5)
+                        while navigator.controller.state == "coasting" and loop.time() < coast_deadline:
+                            await asyncio.sleep(0.05)
+                        stream["movement_controller_final_state"] = navigator.controller.state
+                    except Exception as error:
+                        cleanup_errors.append(f"navigator: {type(error).__name__}: {error}")
+                if unsubscribe is not None:
+                    try:
+                        unsubscribe()
+                    except Exception as error:
+                        cleanup_errors.append(f"unsubscribe: {type(error).__name__}: {error}")
+                if cleanup_errors:
+                    stream["cleanup_errors"] = cleanup_errors
+                    stream["cleanup_error"] = cleanup_errors[0]
+                    stream["status"] = "FAIL"
+                    stream["experiment_conclusion"] = "EXPERIMENT_EXECUTION_BLOCKED"
+                result = await super().__aexit__(exc_type, exc, traceback)
+                stream["runtime_context_closed_session"] = True
+                if status_error is not None and exc is None:
+                    raise status_error
+                return result
+
+        runtime = ProbeRuntime()
         async with runtime:
             bot = runtime.add_bot(BotOptions(
                 server_url=endpoint,
@@ -686,20 +744,21 @@ async def exercise(server, results, transport):
             if stream["dimension"] != DIMENSION_OVERWORLD:
                 raise RuntimeError(f"expected Overworld dimension, got {stream['dimension']}")
 
-            await fill_floor()
-            server.command(f"tp {PLAYER} 0.5 100 0.5")
-            initial_authority = await stable_authoritative_position()
-            if initial_authority["dimension"] != DIMENSION_OVERWORLD:
-                raise RuntimeError("BDS authoritative starting position is not in the Overworld")
-            if math.dist(initial_authority["position"], [0.5, 101.62001, 0.5]) > 0.25:
-                raise RuntimeError(f"unexpected BDS authoritative start position: {initial_authority}")
+            initial_authority = await fill_floor()
 
             for chunk_x in range(5):
                 request_subchunk("initialization", DIMENSION_OVERWORLD, chunk_x, WALK_SUBCHUNK_Y, 0)
             init_deadline = min(operation_deadline, loop.time() + 12.0)
             path_known = lambda: all(world.can_stand(x, WALK_FEET_Y, 0) is True for x in range(65))
-            while loop.time() < init_deadline and not path_known() and not budget["exhausted"]:
+            while (
+                loop.time() < init_deadline
+                and not path_known()
+                and not budget["exhausted"]
+                and not state["observer_failure"]
+            ):
                 await asyncio.sleep(0.05)
+            if state["observer_failure"]:
+                raise RuntimeError("packet observer failed during initialization")
             if budget["exhausted"]:
                 raise RuntimeError("structured evidence budget exhausted during initialization")
             if not path_known():
@@ -716,6 +775,8 @@ async def exercise(server, results, transport):
                     break
                 if budget["exhausted"]:
                     raise RuntimeError("structured evidence budget exhausted before P1 baseline")
+                if state["observer_failure"]:
+                    raise RuntimeError("packet observer failed before P1 baseline")
                 await asyncio.sleep(0.05)
             if not quiet:
                 raise RuntimeError("initial packet and publisher observations did not reach a stable baseline")
@@ -1241,32 +1302,6 @@ async def exercise(server, results, transport):
         stream["error"] = f"{type(error).__name__}: {error}"
         raise
     finally:
-        if navigator is not None:
-            try:
-                navigator.stop()
-                coast_deadline = min(operation_deadline, loop.time() + 1.5)
-                while navigator.controller.state == "coasting" and loop.time() < coast_deadline:
-                    await asyncio.sleep(0.05)
-                stream["movement_controller_final_state"] = navigator.controller.state
-            except Exception as error:
-                stream["cleanup_error"] = f"navigator: {type(error).__name__}: {error}"
-                stream["status"] = "FAIL"
-                stream["experiment_conclusion"] = "EXPERIMENT_EXECUTION_BLOCKED"
-        if bot is not None:
-            try:
-                stream["runtime_final_bot_state"] = str(bot.get_status().state)
-                stream["runtime_context_closed_session"] = True
-            except Exception as error:
-                stream["cleanup_error"] = f"bot: {type(error).__name__}: {error}"
-                stream["status"] = "FAIL"
-                stream["experiment_conclusion"] = "EXPERIMENT_EXECUTION_BLOCKED"
-        if unsubscribe is not None:
-            try:
-                unsubscribe()
-            except Exception as error:
-                stream["cleanup_error"] = f"unsubscribe: {type(error).__name__}: {error}"
-                stream["status"] = "FAIL"
-                stream["experiment_conclusion"] = "EXPERIMENT_EXECUTION_BLOCKED"
         stream["request_calls_by_phase"] = state["request_calls_by_phase"]
         stream["p2_late_responses"] = state["p2_late_responses"]
         stream["packet_event_count"] = budget["event_count"]
