@@ -20,7 +20,7 @@ class ChunkObserverPlugin(Plugin):
     commands = {
         "chunkop": {
             "description": "Emit one read-only A1 loaded-chunk snapshot.",
-            "usages": ["/chunkop snapshot <request_id>"],
+            "usages": ["/chunkop snapshot <request_id: str>"],
             "permissions": ["chunk-observer.command.snapshot"],
         }
     }
@@ -62,6 +62,7 @@ class ChunkObserverPlugin(Plugin):
                     {
                         "request_id": request_id,
                         "status": "error",
+                        "stage": "scheduler_submission",
                         "error": f"{type(error).__name__}: {error}"[:500],
                     },
                     separators=(",", ":"),
@@ -100,6 +101,7 @@ class ChunkObserverPlugin(Plugin):
             record = {
                 "request_id": request_id,
                 "status": "error",
+                "stage": "loaded_chunks_read",
                 "source": "endstone.dimension.loaded_chunks",
                 "sampled_at_utc": datetime.now(timezone.utc).isoformat(),
                 "error": f"{type(error).__name__}: {error}"[:500],

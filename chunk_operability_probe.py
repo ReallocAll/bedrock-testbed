@@ -46,10 +46,52 @@ FAILURE_RESPONSE = re.compile(
     r"not allowed|too many blocks|no targets matched",
     re.I,
 )
+SNAPSHOT_COMMAND_REJECTION = re.compile(r"\bsyntax error\b|\bunknown command\b", re.I)
 
 
 class DiagnosticBlocked(RuntimeError):
-    pass
+    def __init__(self, message: str, *, failure_class: str | None = None):
+        super().__init__(message)
+        self.failure_class = failure_class
+
+
+def exception_text(error: BaseException) -> str:
+    return f"{type(error).__name__}: {error}"[:1000]
+
+
+class ObservedRuntimeContext:
+    """Delegate Runtime's async context protocol while recording its observed outcome."""
+
+    def __init__(self, context, cleanup: dict):
+        self._context = context
+        self._cleanup = cleanup
+
+    async def __aenter__(self):
+        try:
+            value = await self._context.__aenter__()
+        except BaseException as error:
+            self._cleanup["runtime_context_exit_status"] = "enter_failed"
+            self._cleanup["runtime_context_enter_error"] = exception_text(error)
+            raise
+        self._cleanup["runtime_context_entered"] = True
+        self._cleanup["runtime_context_exit_status"] = "not_started"
+        return value
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        self._cleanup["runtime_context_exit_invoked"] = True
+        self._cleanup["runtime_context_exit_status"] = "in_progress"
+        try:
+            result = await self._context.__aexit__(exc_type, exc, traceback)
+        except BaseException as error:
+            self._cleanup["runtime_context_exit_status"] = "failed"
+            self._cleanup["runtime_context_closed"] = None
+            self._cleanup["runtime_context_exit_error"] = exception_text(error)
+            if exc is not None:
+                self._cleanup["runtime_context_body_error"] = exception_text(exc)
+            raise
+        self._cleanup["runtime_context_exit_status"] = "completed"
+        self._cleanup["runtime_context_closed"] = True
+        return result
 
 
 def utc_now() -> str:
@@ -328,21 +370,17 @@ async def request_snapshot(
     offset = server.command(f"chunkop snapshot {request_id}")
     end = min(deadline, time.monotonic() + 6.0)
     record = None
+    command_rejection = None
     lines: list[str] = []
     while time.monotonic() < end:
         lines = server.snapshot(offset)
-        for line in lines:
-            marker_index = line.find(SNAPSHOT_MARKER)
-            if marker_index < 0:
-                continue
-            try:
-                candidate = json.loads(line[marker_index + len(SNAPSHOT_MARKER) :].strip())
-            except json.JSONDecodeError:
-                continue
-            if candidate.get("request_id") == request_id:
-                record = candidate
-                break
+        record = matching_snapshot_record(lines, request_id)
         if record is not None:
+            break
+        command_rejection = next(
+            (line for line in lines if SNAPSHOT_COMMAND_REJECTION.search(line)), None
+        )
+        if command_rejection is not None:
             break
         if server.process is None or server.process.poll() is not None:
             break
@@ -363,9 +401,21 @@ async def request_snapshot(
     diagnostics["snapshots"].append(row)
     ensure_json_size(diagnostics)
     if record is None:
+        if command_rejection is not None:
+            raise DiagnosticBlocked(
+                f"snapshot_command_rejected:{phase}:{command_rejection}",
+                failure_class="COMMAND_REGISTRATION_FAILED",
+            )
         raise DiagnosticBlocked(f"loaded_chunks_snapshot_timeout:{phase}")
     if record.get("status") != "ok":
-        raise DiagnosticBlocked(f"loaded_chunks_snapshot_error:{phase}:{record.get('error')}")
+        failure_class = {
+            "scheduler_submission": "SNAPSHOT_SCHEDULER_FAILED",
+            "loaded_chunks_read": "SERVER_LOAD_STATE_READ_FAILED",
+        }.get(record.get("stage"), "SNAPSHOT_CALLBACK_FAILED")
+        raise DiagnosticBlocked(
+            f"loaded_chunks_snapshot_error:{phase}:{record.get('error')}",
+            failure_class=failure_class,
+        )
     expected_columns = [list(column) for column in TARGET_COLUMNS]
     if record.get("target_columns") != expected_columns:
         raise DiagnosticBlocked(f"loaded_chunks_target_set_mismatch:{phase}")
@@ -391,6 +441,20 @@ async def request_snapshot(
     row["missing_target_columns"] = record.get("missing_target_columns")
     row["target_column_states"] = target_states
     return row
+
+
+def matching_snapshot_record(lines: list[str], request_id: str) -> dict | None:
+    for line in lines:
+        marker_index = line.find(SNAPSHOT_MARKER)
+        if marker_index < 0:
+            continue
+        try:
+            candidate = json.loads(line[marker_index + len(SNAPSHOT_MARKER) :].strip())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict) and candidate.get("request_id") == request_id:
+            return candidate
+    return None
 
 
 async def wait_plugin_ready(server: Server, deadline: float) -> None:
@@ -423,8 +487,7 @@ async def run_diagnostic(server: Server, diagnostics: dict, transport: str, dead
     from endpilot import BotOptions, Runtime
 
     endpoint = "http://127.0.0.1:19132" if transport == "nethernet" else "raknet://127.0.0.1:19132"
-    async with Runtime() as runtime:
-        diagnostics["cleanup"]["runtime_context_entered"] = True
+    async with ObservedRuntimeContext(Runtime(), diagnostics["cleanup"]) as runtime:
         bot = runtime.add_bot(
             BotOptions(
                 server_url=endpoint,
@@ -716,7 +779,11 @@ def make_diagnostics(args, plugin_meta: dict, installed_commit: str | None) -> d
             "observer_disable_hook_observed": None,
             "runtime_context_entered": False,
             "runtime_context_exit_invoked": False,
-            "runtime_context_closed": False,
+            "runtime_context_closed": None,
+            "runtime_context_exit_status": "not_entered",
+            "runtime_context_enter_error": None,
+            "runtime_context_exit_error": None,
+            "runtime_context_body_error": None,
         },
         "output_path": "work/chunk_operability.json",
     }
@@ -804,8 +871,6 @@ def main() -> int:
             diagnostics["nethernet_signaling"] = {"status": signaling_status}
 
         asyncio.run(run_diagnostic(server, diagnostics, args.transport, deadline))
-        diagnostics["cleanup"]["runtime_context_exit_invoked"] = True
-        diagnostics["cleanup"]["runtime_context_closed"] = True
         result["checks"].extend(diagnostics["checks"])
         status, conclusion, labels = classify(diagnostics)
         diagnostics["status"] = status
@@ -821,15 +886,24 @@ def main() -> int:
         if diagnostics is None:
             diagnostics = make_diagnostics(args, {}, result.get("installed_endpilot_commit"))
         diagnostics["status"] = "BLOCKED"
-        if diagnostics["cleanup"].get("runtime_context_entered"):
-            diagnostics["cleanup"]["runtime_context_exit_invoked"] = True
+        failure_class = getattr(error, "failure_class", None)
+        if failure_class is not None:
+            diagnostics["failure_class"] = failure_class
+            result["failure_class"] = failure_class
         error_text = str(error).lower()
         diagnostics["conclusion"] = (
             "LOAD_STATE_UNVERIFIED"
-            if "loaded_chunks" in error_text or "observer_plugin_ready_marker_missing" in error_text
+            if failure_class in {
+                "COMMAND_REGISTRATION_FAILED",
+                "SNAPSHOT_SCHEDULER_FAILED",
+                "SERVER_LOAD_STATE_READ_FAILED",
+                "SNAPSHOT_CALLBACK_FAILED",
+            } or "loaded_chunks" in error_text or "observer_plugin_ready_marker_missing" in error_text
             else "DIAGNOSTIC_EXECUTION_BLOCKED"
         )
-        diagnostics["error"] = f"{type(error).__name__}: {error}"[:1000]
+        diagnostics["error"] = (
+            diagnostics["cleanup"].get("runtime_context_body_error") or exception_text(error)
+        )
         diagnostics["finished_at_utc"] = utc_now()
         diagnostics["budget"]["snapshots_used"] = len(diagnostics["snapshots"])
         result["status"] = "BLOCKED"
@@ -855,9 +929,11 @@ def main() -> int:
                     elif observer_installed:
                         diagnostics["status"] = "FAIL"
                         diagnostics["conclusion"] = "DIAGNOSTIC_EXECUTION_BLOCKED"
-                        diagnostics["error"] = "observer_plugin_disable_hook_marker_missing"
+                        cleanup_error = "observer_plugin_disable_hook_marker_missing"
+                        diagnostics["cleanup"]["observer_disable_error"] = cleanup_error
+                        diagnostics.setdefault("error", cleanup_error)
                         result["status"] = "FAIL"
-                        result["cleanup_error"] = diagnostics["error"]
+                        result["cleanup_error"] = cleanup_error
             except BaseException as error:
                 result["status"] = "FAIL"
                 result["cleanup_error"] = f"{type(error).__name__}: {error}"[:1000]
@@ -865,7 +941,7 @@ def main() -> int:
                     diagnostics["status"] = "FAIL"
                     diagnostics["conclusion"] = "DIAGNOSTIC_EXECUTION_BLOCKED"
                     diagnostics["cleanup"]["bds_graceful_stop"] = False
-                    diagnostics["cleanup"]["error"] = result["cleanup_error"]
+                    diagnostics["cleanup"]["bds_stop_error"] = result["cleanup_error"]
         if diagnostics is not None:
             diagnostics["finished_at_utc"] = diagnostics.get("finished_at_utc") or utc_now()
             diagnostics["budget"]["snapshots_used"] = len(diagnostics["snapshots"])
