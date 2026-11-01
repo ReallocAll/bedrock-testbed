@@ -81,6 +81,8 @@ jobs:
             .venv-client/bin/python navigation_probe.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
           elif [[ "${{ matrix.suite }}" == "smoke" ]]; then
             .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
+          elif [[ "${{ github.ref_name }}" == "test/world-stream-20261101" ]]; then
+            .venv-client/bin/python world_stream_probe.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
           elif [[ "${{ github.ref_name }}" == test/world-data-* ]]; then
             .venv-client/bin/python world_probe.py --server-python .venv-server/bin/python --transport "${{ matrix.transport }}"
           elif [[ "${{ github.ref_name }}" == test/navigation-* ]]; then
@@ -101,6 +103,7 @@ jobs:
           name: real-bds-endpilot-${{ matrix.transport }}${{ matrix.suite == 'navigation' && '-navigation' || '' }}
           path: |
             work/result.json
+            work/world_stream.json
             work/world_probe.json
             work/motion_trajectory.json
             work/controller_trajectory.json
