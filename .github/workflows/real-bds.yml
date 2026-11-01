@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   endpilot:
-    if: github.actor == 'ReallocAll' && github.ref_name != 'test/chunk-operability-a1b-20261101'
+    if: github.actor == 'ReallocAll' && github.ref_name != 'test/chunk-operability-a1b-20261101' && github.ref_name != 'test/chunk-operability-a1b-seed0-20261102'
     name: EndPilot (${{ matrix.suite }}, ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
@@ -133,10 +133,10 @@ jobs:
     if: >-
       github.actor == 'ReallocAll' &&
       github.event_name == 'push' &&
-      github.ref_name == 'test/chunk-operability-a1b-20261101' &&
+      github.ref_name == 'test/chunk-operability-a1b-seed0-20261102' &&
       github.event.before == '0000000000000000000000000000000000000000' &&
       github.event.after == github.sha &&
-      github.event.head_commit.message == 'test(a1b): bounded fixed-world four-condition experiment [A1b-20261101]'
+      github.event.head_commit.message == 'test(a1b): seed-zero four-condition experiment [A1b-20261102]'
     name: A1b fixed-world four-condition BDS
     runs-on: ubuntu-24.04
     timeout-minutes: 55
@@ -194,9 +194,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: chunk-operability-a1b-20261101
+          name: chunk-operability-a1b-seed0-20261102
           path: |
             work/a1b/**
             work/result.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14

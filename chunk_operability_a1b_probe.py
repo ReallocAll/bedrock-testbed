@@ -21,9 +21,9 @@ from urllib.request import urlopen
 import chunk_operability_probe as a1
 from server import PLAYER, PROPERTIES, ROOT, Server, configure
 
-SEED = "73005203"
+SEED = "0"
 SHA = "1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a"
-BRANCH = "test/chunk-operability-a1b-20261101"
+BRANCH = "test/chunk-operability-a1b-seed0-20261102"
 CONDITIONS = (("A", "raknet", 4), ("B", "raknet", 6),
               ("C", "nethernet", 4), ("D", "nethernet", 6))
 OPERATIONS = (
@@ -450,7 +450,9 @@ def main():
                     except BaseException as error:
                         data["status"]="EXECUTION_FAIL"
                         data["cleanup"]["stop_error"]=str(error)[:400]
-                current=None
+                # Preserve an unresolved process for the outer finally cleanup attempt.
+                if current.process is None:
+                    current=None
                 data["budget"]["snapshots_used"]=len(data["snapshots"])
                 data["budget"]["operations_used"]=len(data["operations"])
                 data["cleanup"].setdefault("runtime_context_closed",False)
