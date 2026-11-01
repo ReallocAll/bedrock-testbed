@@ -215,6 +215,79 @@ async def exercise(server, results, transport):
             await query_world()
             await known((0, 0), (0, 8), (3, 4))
 
+            # Frontier-only planning on real decoded BDS cells, with a test-
+            # imposed unknown boundary. This is NOT natural distant loading.
+            from endpilot.navigation import plan_frontier
+
+            class LimitedObservedView:
+                def can_stand(self, x, y, z):
+                    if -1 <= x <= 1 and 0 <= z <= 8:
+                        return world.can_stand(x, y, z)
+                    return None
+
+            await known(*((x, z) for x in range(-1, 2) for z in range(9)))
+            limited = LimitedObservedView()
+            partial = await plan_frontier(limited, (0, 100, 0), GoalNear(0, 100, 12))
+            assert partial.status == "frontier" and partial.frontier == (0, 100, 8)
+            assert partial.search_truncated is False
+            assert partial.progressed and partial.path[-1] == partial.frontier
+            assert all(world.can_stand(*node) is True for node in partial.path)
+            assert all(limited.can_stand(*node) is True for node in partial.path)
+            assert all(max(abs(b[0] - a[0]), abs(b[2] - a[2])) == 1
+                       for a, b in zip(partial.path, partial.path[1:]))
+            assert partial.cost == 8.0
+            records.append({
+                "name": "controlled_safe_frontier",
+                "world_source": "real_bds_decoded_worldquery",
+                "unknown_source": "test_imposed_view_not_natural_unloaded_subchunks",
+                "status": partial.status, "frontier": partial.frontier,
+                "search_truncated": partial.search_truncated,
+                "progressed": partial.progressed,
+                "path": partial.path, "cost": partial.cost,
+                "expanded": partial.expanded, "stand_queries": partial.stand_queries,
+                "max_batch_ms": partial.max_batch_ms,
+            })
+            # Use the same BDS-decoded cells and test-imposed boundary, but
+            # stop before exhausting the 27 known nodes. No movement or
+            # SubChunk requests are issued by plan_frontier.
+            truncated = await plan_frontier(
+                limited, (0, 100, 0), GoalNear(0, 100, 12),
+                max_expansions=3, batch_size=1)
+            assert truncated.status == "frontier" and truncated.search_truncated is True
+            assert truncated.expanded == 3 and truncated.path
+            assert truncated.frontier == truncated.path[-1]
+            assert truncated.progressed == (len(truncated.path) > 1)
+            assert all(world.can_stand(*node) is True for node in truncated.path)
+            assert all(limited.can_stand(*node) is True for node in truncated.path)
+            cost = 0.0
+            for a, b in zip(truncated.path, truncated.path[1:]):
+                dx, dz = b[0] - a[0], b[2] - a[2]
+                assert a[1] == b[1] and max(abs(dx), abs(dz)) == 1
+                if dx and dz:
+                    assert limited.can_stand(a[0] + dx, a[1], a[2]) is True
+                    assert limited.can_stand(a[0], a[1], a[2] + dz) is True
+                cost += math.hypot(dx, dz)
+            assert math.isclose(truncated.cost, cost, abs_tol=1e-9)
+            assert any(limited.can_stand(truncated.frontier[0] + dx, 100,
+                                         truncated.frontier[2] + dz) is None
+                       for dx, dz in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+            records.append({
+                "name": "controlled_truncated_safe_frontier",
+                "world_source": "real_bds_decoded_worldquery",
+                "unknown_source": "test_imposed_view_not_natural_unloaded_subchunks",
+                "status": truncated.status, "search_truncated": truncated.search_truncated,
+                "frontier": truncated.frontier, "path": truncated.path,
+                "cost": truncated.cost, "expanded": truncated.expanded,
+                "progressed": truncated.progressed, "stand_queries": truncated.stand_queries,
+                "elapsed_ms": truncated.elapsed_ms, "max_batch_ms": truncated.max_batch_ms,
+            })
+            complete = await plan_frontier(world, (0, 100, 0), GoalNear(0, 100, 8))
+            assert complete.status == "complete" and complete.frontier is None
+            assert complete.search_truncated is False
+            assert all(world.can_stand(*node) is True for node in complete.path)
+            records.append({"name": "known_safe_frontier_complete",
+                            "status": complete.status, "path": complete.path})
+
             # Strict A/B metrics: same scenario, oracle, transport and code for
             # both pinned SDK SHAs. The reset/known-world waits are not timed.
             for length in (8, 16):
