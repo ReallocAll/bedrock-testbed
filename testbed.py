@@ -929,13 +929,23 @@ async def exercise(server, results):
             await asyncio.sleep(0.1)
             new_offers = bot.get_trade_offers(reopened.ref)
         assert new_offers is not None and new_offers.offers, "No new BDS trade offers"
-        still_exhausted = next((
+        # Recipe network IDs may be reassigned on a new connection. Match
+        # the server's same item exchange, then verify authoritative uses.
+        matching = [
             offer for offer in new_offers.offers
-            if offer.ref and offer.ref.recipe_net_id == quote.ref.recipe_net_id
-        ), None)
-        assert still_exhausted is not None, "Reconnected villager lost exhausted recipe"
+            if offer.ref is not None and offer.input is not None and offer.output is not None
+            and offer.second_input is None
+            and offer.input.identifier == ingredient.identifier
+            and offer.output.identifier == output.identifier
+        ]
+        assert len(matching) == 1, (
+            f"Reconnected villager has {len(matching)} matching trades for "
+            f"{ingredient.identifier} -> {output.identifier}"
+        )
+        still_exhausted = matching[0]
         assert still_exhausted.uses == still_exhausted.max_uses == quote.max_uses, (
-            "Exhausted BDS recipe incorrectly reset after Bot reconnect"
+            f"Exhausted BDS recipe incorrectly reset after Bot reconnect: "
+            f"uses={still_exhausted.uses}, max={still_exhausted.max_uses}"
         )
         slot = next((
             item.slot for item in bot.get_player_inventory()
