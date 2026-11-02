@@ -978,6 +978,154 @@ async def exercise(server, results):
         assert bot.get_trade_window() is None, "Reconnected trade window did not close"
         results["checks"].append("trade_references_rejected_and_reopened_after_reconnect")
 
+        # A second real BDS client observes the first player's authoritative
+        # actor metadata. Input flags alone would not prove sneak/sprint state.
+        # A contiguous BDS-controlled platform keeps both players grounded when
+        # moving forward to test sprint; otherwise the first bot falls off.
+        server.command("fill -3 220 -3 12 220 12 stone")
+        server.command(f"tp {PLAYER} 0.5 221 0.5")
+        server.command(f"tp {other_name} 2.5 221 0.5")
+        deadline = loop.time() + 10
+        previous_server_y = None
+        while loop.time() < deadline:
+            grounded = await authoritative_position()
+            local = bot.get_status().position
+            located = (abs(grounded["x"] - 0.5) < 0.2
+                       and abs(grounded["z"] - 0.5) < 0.2
+                       and 221 <= grounded["y"] <= 223
+                       and abs(local.y - 221) < 2)
+            stable = (previous_server_y is not None
+                      and abs(grounded["y"] - previous_server_y) < 0.05)
+            if located and stable:
+                break
+            previous_server_y = grounded["y"] if located else None
+            await asyncio.sleep(0.05)
+        else:
+            raise AssertionError(
+                f"Main bot not stable on platform: server={grounded}, "
+                f"client=({local.x}, {local.y}, {local.z}), previous_y={previous_server_y}"
+            )
+
+        stable_authoritative_position = Vec3(grounded["x"], grounded["y"], grounded["z"])
+
+        def peer_flags():
+            players = [actor for actor in other.get_observed_entities()
+                       if actor.type == "minecraft:player"]
+            if len(players) != 1:
+                return None
+            actor = other.capture_actor(players[0].ref.runtime_id)
+            if actor is None or actor.metadata is None:
+                return None
+            entries = [entry for entry in actor.metadata.entries if entry.id == 0]
+            return int(entries[0].value) if len(entries) == 1 else None
+
+        deadline = loop.time() + 12
+        baseline_flags = peer_flags()
+        while baseline_flags is None and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+            baseline_flags = peer_flags()
+        assert baseline_flags is not None, "Second Bot never observed first player's BDS flags"
+        results["peer_initial_flags"] = baseline_flags
+        original_id = bot.get_status().actor_runtime_id
+        peer_updates = []
+
+        def record_peer_flags(source, event):
+            if (
+                source is other and isinstance(event, PacketDecodedEvent)
+                and event.packet.header.packet_id == 39
+                and int(event.packet.payload.id) == original_id
+            ):
+                for entry in event.packet.payload.packed_items.data:
+                    if int(entry.id) == 0:
+                        peer_updates.append(int(entry.payload.value.value))
+
+        unsubscribe_metadata = runtime.subscribe(
+            record_peer_flags, events=event_mask(EventKind.packet_decoded)
+        )
+        phase, enabled, sent = None, False, 0
+
+        def send_state(source, event):
+            nonlocal sent
+            if source is not bot or not isinstance(event, TickEvent) or phase is None:
+                return
+            raw_flags = ()
+            if sent == 0:
+                raw_flags = (("START_" if enabled else "STOP_") + phase.upper(),)
+            if phase == "sneaking":
+                if enabled:
+                    raw_flags += ("SNEAK_DOWN", "SNEAK_CURRENT_RAW", "WANT_DOWN")
+                    if sent == 0:
+                        raw_flags += ("SNEAK_PRESSED_RAW",)
+                elif sent == 0:
+                    raw_flags += ("SNEAK_RELEASED_RAW",)
+            if phase == "sprinting" and enabled:
+                raw_flags += ("SPRINT_DOWN",)
+            moving = phase == "sprinting" and enabled
+            delta = Vec3(0, 0, 0.09) if moving else Vec3()
+            position = (stable_authoritative_position if phase == "sneaking"
+                        else source.get_status().position)
+            source.set_input(Input(
+                position=Vec3(position.x, position.y, position.z + delta.z),
+                delta=delta,
+                move=Vec2(0, 1) if moving else Vec2(),
+                sneaking=enabled if phase == "sneaking" else False,
+                sprinting=enabled if phase == "sprinting" else False,
+                flags=raw_flags,
+            ))
+            sent += 1
+
+        unsubscribe_input = runtime.subscribe(send_state, events=event_mask(EventKind.tick))
+        observed = []
+        phase_failures = []
+        try:
+            for phase_name, bit, target in (
+                ("sneaking", 1, True),
+                ("sneaking", 1, False),
+                ("sprinting", 3, True),
+                ("sprinting", 3, False),
+            ):
+                start_server = await authoritative_position() if phase_name == "sprinting" and target else None
+                phase, enabled, sent = phase_name, target, 0
+                previous = len(peer_updates)
+                deadline = loop.time() + 7
+                while loop.time() < deadline:
+                    await asyncio.sleep(0.03)
+                    current = peer_flags()
+                    if sent >= (40 if target else 8) and current is not None and bool(current & (1 << bit)) == target and any(
+                        bool(flags & (1 << bit)) == target for flags in peer_updates[previous:]
+                    ):
+                        observed.append({"state": phase_name, "enabled": target, "flags": current, "frames": sent})
+                        if start_server is not None:
+                            finish_server = await authoritative_position()
+                            displacement = math.hypot(finish_server["x"] - start_server["x"],
+                                                      finish_server["z"] - start_server["z"])
+                            if displacement <= 0.5:
+                                phase_failures.append(
+                                    f"Server never confirmed forward sprint movement: {start_server} -> {finish_server}"
+                                )
+                            results["sprint_server_displacement"] = displacement
+                        break
+                else:
+                    phase_failures.append(
+                        f"BDS peer never confirmed {phase_name}={target} while sending input: "
+                        f"frames={sent}, current={peer_flags()}, new_updates={peer_updates[previous:]}"
+                    )
+                    if start_server is not None:
+                        finish_server = await authoritative_position()
+                        results["sprint_server_displacement"] = math.hypot(
+                            finish_server["x"] - start_server["x"],
+                            finish_server["z"] - start_server["z"],
+                        )
+            results["peer_movement_flags"] = observed
+            results["peer_movement_failures"] = phase_failures
+            if phase_failures:
+                raise AssertionError("; ".join(phase_failures))
+            results["checks"].append("sneak_sprint_peer_server_confirmed")
+        finally:
+            phase = None
+            unsubscribe_input()
+            unsubscribe_metadata()
+
         await bot.disconnect()
         await other.disconnect()
         results["bds_offline_list"] = await expect_players(0)
