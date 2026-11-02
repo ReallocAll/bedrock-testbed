@@ -2,7 +2,7 @@
 
 Minimal real-server smoke tests on Ubuntu 24.04 x86-64. Server: **Endstone
 0.11.14 / BDS 1.26.52 / protocol 2193** on Python 3.13. Client: EndPilot
-`1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a` (default, overridable) on Python 3.12.
+`96045ce85d9ba373db64daab09cc7176e1e29a15` (default, overridable) on Python 3.12.
 
 On `main` and `test/navigation-frontier-20261101`, GitHub Actions runs
 independent **Smoke** (`testbed.py`) and **Navigation** (`navigation_probe.py`)
@@ -34,9 +34,9 @@ python3.13 -m venv .venv-server
 python3.12 -m venv .venv-client
 # Extract the pinned artifacts to dependencies/pure and dependencies/native first.
 .venv-client/bin/python -m pip install dependencies/pure/*.whl dependencies/native/*.whl \
-  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a'
+  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@96045ce85d9ba373db64daab09cc7176e1e29a15'
 .venv-client/bin/python testbed.py --server-python .venv-server/bin/python \
-  --endpilot-commit 1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a
+  --endpilot-commit 96045ce85d9ba373db64daab09cc7176e1e29a15
 ```
 
 For an independent Navigation run, use the same isolated environments and
@@ -44,7 +44,7 @@ pinned dependencies, but run the navigation probe instead of the Smoke suite:
 
 ```bash
 .venv-client/bin/python navigation_probe.py --server-python .venv-server/bin/python \
-  --endpilot-commit 1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a --transport raknet
+  --endpilot-commit 96045ce85d9ba373db64daab09cc7176e1e29a15 --transport raknet
 ```
 
 Navigation validates known-map routing and safe-frontier planning with real

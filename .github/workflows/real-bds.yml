@@ -9,7 +9,7 @@ on:
         description: 'Exact EndPilot commit SHA (40 lowercase hex characters)'
         required: false
         type: string
-        default: '1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a'
+        default: '96045ce85d9ba373db64daab09cc7176e1e29a15'
 
 permissions:
   contents: read
@@ -30,7 +30,7 @@ jobs:
         suite: ${{ fromJSON((github.ref_name == 'main' || github.ref_name == 'test/navigation-frontier-20261101') && '["smoke","navigation"]' || '["branch"]') }}
     timeout-minutes: 30
     env:
-      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a' }}
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '96045ce85d9ba373db64daab09cc7176e1e29a15' }}
     steps:
       - uses: actions/checkout@v4
         with:
