@@ -81,7 +81,7 @@ jobs:
             .venv-client/bin/python navigation_probe.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
           elif [[ "${{ matrix.suite }}" == "smoke" ]]; then
             .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
-          elif [[ "${{ github.ref_name }}" == "test/world-stream-20261101" ]]; then
+          elif [[ "${{ github.ref_name }}" == "test/world-streaming" ]]; then
             .venv-client/bin/python world_stream_probe.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
           elif [[ "${{ github.ref_name }}" == test/world-data-* ]]; then
             .venv-client/bin/python world_probe.py --server-python .venv-server/bin/python --transport "${{ matrix.transport }}"
