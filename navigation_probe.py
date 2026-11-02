@@ -1,0 +1,322 @@
+"""Real-BDS known-flat A* navigation acceptance (independent server oracle).
+
+The observer is the only Bot.set_input writer. The planner receives no hard-coded
+route coordinates; walls are built using actual BDS fill commands.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import math
+import sys
+
+import testbed
+import scenarios
+from server import PLAYER, ROOT
+
+
+async def exercise(server, results, transport):
+    from endpilot import (
+        BotOptions, EventKind, PositionEvent, Runtime, StateEvent,
+        TickEvent, event_mask,
+    )
+    from endpilot.navigation import GoalNear, NavigationError, Navigator
+    from endpilot.world import WorldQuery
+
+    endpoint = ("http://127.0.0.1:19132" if transport == "nethernet"
+                else "raknet://127.0.0.1:19132")
+    loop = asyncio.get_running_loop()
+    records = []
+    results["navigation"] = {"cases": records}
+    forwarded = 0
+    exceptions = []
+    async with Runtime() as runtime:
+        bot = runtime.add_bot(BotOptions(
+            server_url=endpoint, transport=transport, protocol=2193,
+            name=PLAYER, chunk_radius=16, validate_all_packets=True,
+            client_cache=False,
+        ))
+        world = WorldQuery(bot)
+        navigator = Navigator(bot, world)
+
+        def observe(source, event):
+            nonlocal forwarded
+            if source is not bot:
+                return
+            try:
+                frame = navigator.on_event(event)
+                if frame is not None:
+                    forwarded += 1
+                    source.set_input(frame)  # Exactly one application writer.
+            except Exception as exc:
+                exceptions.append(f"{type(exc).__name__}: {exc}")
+                navigator.stop()
+
+        mask = 0
+        for kind in (EventKind.tick, EventKind.position, EventKind.dimension,
+                     EventKind.state, EventKind.packet_decoded):
+            mask |= event_mask(kind)
+        unsubscribe = runtime.subscribe(observe, events=mask)
+
+        async def authoritative():
+            offset = server.command(f"querytarget {PLAYER}")
+            deadline = loop.time() + 5
+            while loop.time() < deadline:
+                lines = server.snapshot(offset)
+                fields = [line.partition("]:")[2].strip() for line in lines]
+                begin = next((i for i, v in enumerate(fields) if v.startswith("Target data:")), None)
+                if begin is not None:
+                    end = next((i for i in range(begin + 1, len(fields)) if fields[i] == "]"), None)
+                    if end is not None:
+                        raw = fields[begin].split("Target data:", 1)[1] + " ".join(fields[begin + 1:end + 1])
+                        data = json.loads(raw)
+                        if len(data) != 1 or data[0]["dimension"] != 0:
+                            raise AssertionError(f"Unexpected querytarget result: {data}")
+                        pos = data[0]["position"]
+                        return (float(pos["x"]), float(pos["y"]), float(pos["z"]))
+                if any("unknown command" in v.lower() or "syntax error" in v.lower() for v in lines):
+                    raise RuntimeError("BDS querytarget unavailable")
+                await asyncio.sleep(.025)
+            raise TimeoutError(f"querytarget timed out: {server.snapshot(offset)[-6:]}")
+
+        async def fill(command):
+            for attempt in range(5):
+                offset = server.command(command)
+                until = loop.time() + 5
+                while loop.time() < until:
+                    lines = server.snapshot(offset)
+                    if any("blocks filled" in v.lower() or "block filled" in v.lower() for v in lines):
+                        return
+                    if any("outside of the world" in v.lower() or "failed" in v.lower() for v in lines):
+                        break
+                    await asyncio.sleep(.05)
+                else:
+                    raise TimeoutError(f"BDS did not acknowledge: {command}")
+                if not any("outside of the world" in v.lower() for v in lines):
+                    raise AssertionError(f"BDS fill failed: {command}: {lines}")
+                await asyncio.sleep(.7)
+            raise AssertionError(f"BDS chunks not editable: {command}")
+
+        async def reset():
+            server.command(f"tp {PLAYER} 0.5 100 0.5")
+            until = loop.time() + 8
+            while loop.time() < until:
+                actual = await authoritative()
+                status = bot.get_status()
+                if (math.hypot(actual[0] - .5, actual[2] - .5) < .1
+                        and abs(actual[1] - 101.62001) < .2
+                        and math.hypot(status.position.x - .5, status.position.z - .5) < .2):
+                    await asyncio.sleep(.3)
+                    return actual
+                await asyncio.sleep(.08)
+            raise AssertionError(f"Cannot reset grounded player: {actual}")
+
+        async def query_world():
+            for cx in (-1, 0, 1):
+                for cz in (-1, 0, 1):
+                    bot.request_sub_chunks(0, cx, cz, [6])
+
+        async def known(*points):
+            until = loop.time() + 20
+            request_at = 0
+            while loop.time() < until:
+                if all(world.can_stand(x, 100, z) is not None for x, z in points):
+                    return
+                if loop.time() >= request_at:
+                    await query_world()
+                    request_at = loop.time() + 2
+                await asyncio.sleep(.1)
+            raise AssertionError(f"WorldQuery still unknown at {points}")
+
+        async def wait_stand(x, z, expected):
+            # BDS command acknowledgement can precede inbound block updates;
+            # require the *observed* WorldQuery state, not merely the command ack.
+            until = loop.time() + 12
+            request_at = 0
+            while loop.time() < until:
+                if world.can_stand(x, 100, z) is expected:
+                    return
+                if loop.time() >= request_at:
+                    await query_world()
+                    request_at = loop.time() + 1.5
+                await asyncio.sleep(.08)
+            raise AssertionError(
+                f"WorldQuery did not observe ({x},100,{z}) as {expected}: "
+                f"actual={world.can_stand(x, 100, z)}"
+            )
+
+        async def moving_to(goal):
+            task = asyncio.create_task(navigator.goto(goal))
+            deadline = loop.time() + 6
+            while loop.time() < deadline:
+                await asyncio.sleep(.025)
+                if task.done():
+                    await task  # Surface a premature planning/movement failure.
+                    raise AssertionError("navigation finished before movement cancellation case")
+                if (navigator._future is not None and navigator.controller.state == "moving"
+                        and navigator.controller.frames >= 8):
+                    return task
+            task.cancel()
+            raise AssertionError("navigation did not enter moving state")
+
+        async def run_goal(name, destination, timeout=30):
+            before = await reset()
+            await known((0, 0), (destination.x, destination.z))
+            record = {"name": name, "origin": before}
+            records.append(record)
+            start = loop.time()
+            sent = forwarded
+            await asyncio.wait_for(navigator.goto(destination), timeout)
+            record["navigation_ms"] = round((loop.time() - start) * 1000, 3)
+            plan = navigator.last_plan
+            record["plan"] = {
+                "status": plan.status, "path": plan.path, "cost": plan.cost,
+                "expanded": plan.expanded, "peak_open": plan.peak_open,
+                "stand_queries": plan.stand_queries, "elapsed_ms": plan.elapsed_ms,
+                "max_batch_ms": plan.max_batch_ms,
+            }
+            record["frames"] = forwarded - sent
+            await asyncio.sleep(.3)
+            p1 = await authoritative()
+            await asyncio.sleep(.3)
+            p2 = await authoritative()
+            record["authoritative"] = p2
+            record["final_error"] = math.hypot(
+                p2[0] - (destination.x + .5), p2[2] - (destination.z + .5))
+            record["stop_drift"] = math.dist((p1[0], p1[2]), (p2[0], p2[2]))
+            assert plan.status == "complete" and record["frames"] > 0, record
+            assert record["final_error"] <= .12 and record["stop_drift"] <= .05, record
+            return record
+
+        try:
+            await bot.wait_ready(65)
+            await authoritative()
+            server.command(f"tp {PLAYER} 0.5 100 0.5")
+            await asyncio.sleep(.8)
+            await fill("fill -12 100 -12 12 105 12 air")
+            await fill("fill -12 99 -12 12 99 12 stone")
+            await query_world()
+            await known((0, 0), (0, 8), (3, 4))
+
+            straight = await run_goal("straight", GoalNear(0, 100, 8))
+            assert all(node[0] == 0 for node in straight["plan"]["path"])
+
+            await fill("fill 0 100 2 0 101 6 stone")
+            await known((0, 3), (-1, 3), (1, 3))
+            await wait_stand(0, 3, False)
+            detour = await run_goal("wall_detour", GoalNear(0, 100, 8))
+            assert all(not (x == 0 and 2 <= z <= 6) for x, _, z in detour["plan"]["path"])
+            assert any(x != 0 for x, _, _ in detour["plan"]["path"])
+            await fill("fill 0 100 2 0 101 6 air")
+            await wait_stand(0, 3, True)
+
+            await fill("fill 0 100 8 0 101 8 stone")
+            await reset()
+            await wait_stand(0, 8, False)
+            try:
+                await asyncio.wait_for(navigator.goto(GoalNear(0, 100, 8)), 5)
+            except NavigationError as exc:
+                assert str(exc) == "unreachable", str(exc)
+                records.append({"name": "unreachable", "status": str(exc)})
+            else:
+                raise AssertionError("planned through solid goal")
+            await fill("fill 0 100 8 0 101 8 air")
+            await wait_stand(0, 8, True)
+
+            await reset()
+            try:
+                await asyncio.wait_for(navigator.goto(GoalNear(2000, 100, 2000)), 5)
+            except NavigationError as exc:
+                assert str(exc) == "need_world", str(exc)
+                records.append({"name": "unknown_world", "status": str(exc)})
+            else:
+                raise AssertionError("accepted unknown destination")
+
+            await reset()
+            task = await moving_to(GoalNear(0, 100, 8))
+            navigator.stop()
+            try:
+                await task
+            except NavigationError as exc:
+                assert str(exc) == "navigation stopped"
+            else:
+                raise AssertionError("stop did not interrupt goto")
+            await asyncio.sleep(.4)
+            p1 = await authoritative()
+            await asyncio.sleep(.4)
+            p2 = await authoritative()
+            assert math.dist((p1[0], p1[2]), (p2[0], p2[2])) <= .05
+            records.append({"name": "stop", "state": navigator.controller.state,
+                            "drift": math.dist((p1[0], p1[2]), (p2[0], p2[2]))})
+
+            await reset()
+            task = await moving_to(GoalNear(0, 100, 8))
+            server.command(f"tp {PLAYER} 2.5 100 2.5")
+            try:
+                await asyncio.wait_for(task, 6)
+            except NavigationError:
+                pass
+            else:
+                raise AssertionError("teleport did not invalidate route")
+            assert navigator.controller.state == "failed"
+            records.append({"name": "teleport", "state": navigator.controller.state})
+
+            await reset()
+            task = await moving_to(GoalNear(0, 100, 8))
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            else:
+                raise AssertionError("Task.cancel did not propagate")
+            assert navigator.controller.state in ("coasting", "cancelled")
+            records.append({"name": "task_cancel", "state": navigator.controller.state})
+
+            await reset()
+            task = await moving_to(GoalNear(0, 100, 8))
+            # Update a future route cell while motion is active. The packet
+            # observer must invalidate it before a controller frame crosses it.
+            await fill("fill 0 100 5 0 101 5 stone")
+            await wait_stand(0, 5, False)
+            try:
+                await asyncio.wait_for(task, 8)
+            except NavigationError as exc:
+                assert "path invalidated" in str(exc), str(exc)
+                records.append({"name": "path_block_changed", "reason": str(exc)})
+            else:
+                raise AssertionError("active route survived a new solid obstacle")
+            assert not navigator._path
+            await fill("fill 0 100 5 0 101 5 air")
+            await wait_stand(0, 5, True)
+
+            await reset()
+            task = await moving_to(GoalNear(0, 100, 8))
+            previous = bot.get_status().session_id
+            await bot.disconnect()
+            try:
+                await task
+            except NavigationError:
+                pass
+            else:
+                raise AssertionError("disconnect failed to stop navigation")
+            await bot.reconnect()
+            await bot.wait_ready(65)
+            assert bot.get_status().session_id != previous
+            assert not navigator._path
+            records.append({"name": "disconnect_reconnect", "old_session": previous,
+                            "new_session": bot.get_status().session_id})
+            await bot.disconnect()
+            assert not exceptions, exceptions
+            results["checks"].append("navigation_real_bds_authoritative")
+        finally:
+            navigator.stop()
+            unsubscribe()
+            (ROOT / "work" / "navigation_trajectory.json").write_text(
+                json.dumps(records, indent=2, ensure_ascii=False) + "\n"
+            )
+
+
+if __name__ == "__main__":
+    scenarios.exercise = exercise
+    sys.exit(testbed.main())
