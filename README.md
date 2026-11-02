@@ -2,7 +2,7 @@
 
 Minimal real-server smoke tests on Ubuntu 24.04 x86-64. Server: **Endstone
 0.11.14 / BDS 1.26.52 / protocol 2193** on Python 3.13. Client: EndPilot
-`b5a74d12497ddcc44eddf61ee6813138889ff40f` on Python 3.12.
+`9ed2dc59ea069b621b019919b7333613e6cdb711` (default, overridable) on Python 3.12.
 
 The client's `bedrock-protocol-native==0.5.0.dev0` is not on PyPI. Use the
 CI-verified `python-pure` and `python-native-Linux` CPython 3.12 wheels from
@@ -18,9 +18,17 @@ python3.13 -m venv .venv-server
 python3.12 -m venv .venv-client
 # Extract the pinned artifacts to dependencies/pure and dependencies/native first.
 .venv-client/bin/python -m pip install dependencies/pure/*.whl dependencies/native/*.whl \
-  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@b5a74d12497ddcc44eddf61ee6813138889ff40f'
-.venv-client/bin/python testbed.py --server-python .venv-server/bin/python
+  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@9ed2dc59ea069b621b019919b7333613e6cdb711'
+.venv-client/bin/python testbed.py --server-python .venv-server/bin/python \
+  --endpilot-commit 9ed2dc59ea069b621b019919b7333613e6cdb711
 ```
+
+Use Actions **Run workflow** with the optional `endpilot_commit` input to test an exact
+40-character commit; pushes use the verified default above. The test reads
+`endpilot`'s PEP 610 `direct_url.json` from the installed distribution and fails
+before starting BDS if its actual VCS commit differs. `work/result.json` records
+both expected `endpilot_commit` and `installed_endpilot_commit`, including on
+failure. Input must be lowercase hex, not a branch name.
 
 The test performs two BDS starts: the first lets official Endstone fetch and
 verify BDS; after stopping it, the test configures offline mode, deletes the

@@ -2,8 +2,14 @@ name: Real BDS EndPilot Smoke
 
 on:
   push:
-    branches: [feat/endpilot-real-bds, main]
+    branches: [feat/endpilot-real-bds, test/endpilot-revision-validation, main]
   workflow_dispatch:
+    inputs:
+      endpilot_commit:
+        description: 'Exact EndPilot commit SHA (40 lowercase hex characters)'
+        required: false
+        type: string
+        default: '9ed2dc59ea069b621b019919b7333613e6cdb711'
 
 permissions:
   contents: read
@@ -17,6 +23,8 @@ jobs:
     if: github.actor == 'ReallocAll'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '9ed2dc59ea069b621b019919b7333613e6cdb711' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,13 +59,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ ! "$ENDPILOT_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error::endpilot_commit must be a full lowercase 40-character SHA'
+            exit 1
+          fi
           python -m venv .venv-client
           .venv-client/bin/python -m pip install dependencies/pure/*.whl dependencies/native/*.whl \
-            'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@b5a74d12497ddcc44eddf61ee6813138889ff40f'
+            "endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@${ENDPILOT_COMMIT}"
           .venv-client/bin/python -m pip check
           .venv-client/bin/python -m pip show endpilot bedrock-protocol-native
       - name: Exercise public Typed Packet API against fresh real BDS
-        run: .venv-client/bin/python testbed.py --server-python .venv-server/bin/python
+        run: .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT"
       - name: Save evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
