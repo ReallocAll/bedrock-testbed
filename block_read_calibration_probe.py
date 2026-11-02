@@ -19,7 +19,7 @@ from server import PLAYER, ROOT, PROPERTIES, Server
 
 SEED = "73005203"
 ENDPILOT_SHA = "1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a"
-BRANCH = "test/block-read-calibration-20261102"
+BRANCH = "test/block-read-side-effects"
 MARK_SNAPSHOT = "CHUNKOP_SNAPSHOT "
 MARK_READ = "CHUNKOP_READ "
 CASES = [("L", a) for a in ("control", "handle", "type", "data", "command")] + [
