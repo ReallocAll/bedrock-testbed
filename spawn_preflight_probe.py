@@ -21,7 +21,7 @@ from server import PLAYER, PROPERTIES, ROOT, Server
 
 SEED = "0"  # One predetermined, unproven control seed; never fallback.
 SHA = "1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a"
-BRANCH = "test/spawn-preflight-20261102"
+BRANCH = "test/spawn-preflight"
 OUT = ROOT / "work" / "spawn-preflight"
 REQUIRED = {
     **PROPERTIES,
