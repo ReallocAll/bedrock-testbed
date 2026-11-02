@@ -21,7 +21,7 @@ from server import PLAYER, PROPERTIES, ROOT, Server
 
 SEED = "0"  # One predetermined, unproven control seed; never fallback.
 SHA = "1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a"
-BRANCH = "test/spawn-preflight-ready-20261102"
+BRANCH = "test/spawn-observer-readiness"
 OUT = ROOT / "work" / "spawn-preflight"
 REQUIRED = {
     **PROPERTIES,
@@ -257,7 +257,7 @@ from chunk_operability_a1b_probe import (
     strict_command as _landing_strict_command,
 )
 
-LANDING_BRANCH = "test/spawn-operability-seed0-20261102"
+LANDING_BRANCH = "test/spawn-landing-seed-zero"
 LANDING_OUT = ROOT / "work" / "spawn-operability-seed0"
 LANDING_MESSAGE = "test(spawn): verify seed zero landing operability [20261102]"
 
