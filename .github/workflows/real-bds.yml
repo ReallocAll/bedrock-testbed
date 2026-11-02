@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        transport: [raknet, nethernet]
+        transport: ${{ fromJSON(github.ref_name == 'test/tickingarea-landing-preflight' && '["raknet"]' || '["raknet","nethernet"]') }}
         suite: ${{ fromJSON((github.ref_name == 'main' || github.ref_name == 'test/navigation-frontier-20261101') && '["smoke","navigation"]' || '["branch"]') }}
     timeout-minutes: 30
     env:
@@ -42,6 +42,11 @@ jobs:
         run: |
           python -m venv .venv-server
           .venv-server/bin/python -m pip install 'endstone==0.11.14'
+      - name: Build test-only observer for this branch
+        if: github.ref_name == 'test/tickingarea-landing-preflight'
+        run: |
+          mkdir -p dependencies/tickingarea-observer
+          .venv-server/bin/python -m pip wheel --no-deps --wheel-dir dependencies/tickingarea-observer ./diagnostics/tickingarea_observer
       - name: Get pinned protocol compiler wheel
         uses: actions/download-artifact@v4
         with:
@@ -77,7 +82,9 @@ jobs:
       - name: Exercise public Typed Packet API against fresh real BDS
         shell: bash
         run: |
-          if [[ "${{ matrix.suite }}" == "navigation" ]]; then
+          if [[ "${{ github.ref_name }}" == 'test/tickingarea-landing-preflight' ]]; then
+            .venv-client/bin/python tickingarea_landing_probe.py --server-python .venv-server/bin/python --plugin-wheel dependencies/tickingarea-observer/*.whl --endpilot-commit "$ENDPILOT_COMMIT" --transport raknet
+          elif [[ "${{ matrix.suite }}" == "navigation" ]]; then
             .venv-client/bin/python navigation_probe.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
           elif [[ "${{ matrix.suite }}" == "smoke" ]]; then
             .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
@@ -101,6 +108,11 @@ jobs:
           name: real-bds-endpilot-${{ matrix.transport }}${{ matrix.suite == 'navigation' && '-navigation' || '' }}
           path: |
             work/result.json
+            work/tickingarea_landing.json
+            work/A-server.properties
+            work/B-server.properties
+            work/A-version.txt
+            work/B-version.txt
             work/world_probe.json
             work/motion_trajectory.json
             work/controller_trajectory.json

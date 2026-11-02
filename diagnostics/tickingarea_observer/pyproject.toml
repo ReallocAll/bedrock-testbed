@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "endstone-tickingarea-observer"
+version = "0.1.0"
+description = "Test-only passive loaded-chunk and post-Fill block observer"
+requires-python = ">=3.13"
+
+[project.entry-points."endstone"]
+tickingarea-observer = "tickingarea_observer:TickingAreaObserver"
+
+[tool.setuptools.packages.find]
+where = ["src"]
