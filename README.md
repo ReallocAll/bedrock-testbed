@@ -81,7 +81,10 @@ without changing the maximum. The same server recipe is then exercised repeatedl
 `uses == max_uses`, proving an actual exhaust-and-refuse boundary:
 each exchange is acknowledged by BDS, inputs/outputs are conserved,
 and a subsequent public Trade2 request must be rejected locally without
-writing another ItemStackRequest packet. The current smoke includes **24 checks**.
+writing another ItemStackRequest packet. After disconnect/reconnect, the original BDS recipe must still be
+exhausted in the newly opened window, and the new Session must also reject
+a further attempt without sending an ItemStackRequest.
+The current smoke includes **25 checks**.
 No additional server boot or Bot manager is required.
 
 No production servers/worlds, generic adapters, custom packet codecs or test
