@@ -23,7 +23,7 @@ from server import PLAYER, PROPERTIES, ROOT, Server, configure
 
 SEED = "0"
 SHA = "1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a"
-BRANCH = "test/chunk-operability-a1b-seed0-20261102"
+BRANCH = "test/chunk-operability-seed-zero"
 CONDITIONS = (("A", "raknet", 4), ("B", "raknet", 6),
               ("C", "nethernet", 4), ("D", "nethernet", 6))
 OPERATIONS = (
