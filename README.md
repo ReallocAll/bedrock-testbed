@@ -2,15 +2,16 @@
 
 Minimal real-server smoke tests on Ubuntu 24.04 x86-64. Server: **Endstone
 0.11.14 / BDS 1.26.52 / protocol 2193** on Python 3.13. Client: EndPilot
-`603aee40b2dfbabc3ee932dab3b8ebb97fe0ec1d` (default, overridable) on Python 3.12.
+`1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a` (default, overridable) on Python 3.12.
 
-The workflow runs the same public-API smoke suite independently against **RakNet**
-and **NetherNet** on clean BDS 26.52 instances. NetherNet additionally requires a
-real HTTP `/v1/join` capability response from the BDS process before the game
-handshake; successful signaling alone does not count as a pass. Every behavioral
-check uses server responses or BDS commands, not a simulated peer. The CLI
-defaults to RakNet for compatibility with earlier runs; select NetherNet with
-`--transport nethernet`. Each CI transport saves separate evidence artifacts.
+On `main` and `test/navigation-frontier-20261101`, GitHub Actions runs
+independent **Smoke** (`testbed.py`) and **Navigation** (`navigation_probe.py`)
+suites for both **RakNet** and **NetherNet**: four separate runner/BDS jobs,
+each with its own evidence artifact. Other experiment branches retain their
+existing two-transport test selection. All checks use actual BDS responses, not
+a simulated peer. NetherNet also requires an actual HTTP `/v1/join`
+capability response before the game handshake; signaling alone is insufficient.
+The CLI defaults to RakNet; use `--transport nethernet` to select NetherNet.
 
 This testbed uses the exact CI-built `bedrock-protocol-native==0.5.0` wheels;
 a durable GitHub Release/PyPI source has not yet replaced the artifact pin. Use the
@@ -33,10 +34,24 @@ python3.13 -m venv .venv-server
 python3.12 -m venv .venv-client
 # Extract the pinned artifacts to dependencies/pure and dependencies/native first.
 .venv-client/bin/python -m pip install dependencies/pure/*.whl dependencies/native/*.whl \
-  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@603aee40b2dfbabc3ee932dab3b8ebb97fe0ec1d'
+  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a'
 .venv-client/bin/python testbed.py --server-python .venv-server/bin/python \
-  --endpilot-commit 603aee40b2dfbabc3ee932dab3b8ebb97fe0ec1d
+  --endpilot-commit 1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a
 ```
+
+For an independent Navigation run, use the same isolated environments and
+pinned dependencies, but run the navigation probe instead of the Smoke suite:
+
+```bash
+.venv-client/bin/python navigation_probe.py --server-python .venv-server/bin/python \
+  --endpilot-commit 1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a --transport raknet
+```
+
+Navigation validates known-map routing and safe-frontier planning with real
+BDS-decoded `WorldQuery` blocks. Its unknown boundary is imposed by the test's
+restricted observation view; it does **not** demonstrate natural unloaded
+SubChunk loading, remote prefetch, or stage 3.2 functionality. Run the suites
+separately in a local checkout: each invocation recreates `work/`.
 
 Use Actions **Run workflow** with the optional `endpilot_commit` input to test an exact
 40-character commit; pushes use the verified default above. The test reads
