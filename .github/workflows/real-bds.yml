@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   endpilot:
-    if: github.actor == 'ReallocAll' && github.ref_name != 'test/chunk-operability-a1b-20261101' && github.ref_name != 'test/chunk-operability-a1b-seed0-20261102' && github.ref_name != 'test/chunk-operability-a1b-handoff-20261102'
+    if: github.actor == 'ReallocAll' && github.ref_name != 'test/chunk-operability-a1b-20261101' && github.ref_name != 'test/chunk-operability-a1b-seed0-20261102' && github.ref_name != 'test/chunk-operability-a1b-handoff-20261102' && github.ref_name != 'test/nethernet-rebind-preflight-20261102'
     name: EndPilot (${{ matrix.suite }}, ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
@@ -199,4 +199,71 @@ jobs:
             work/a1b/**
             work/result.json
           if-no-files-found: error
+          retention-days: 14
+
+  rebind_preflight:
+    if: >-
+      github.actor == 'ReallocAll' &&
+      github.event_name == 'push' &&
+      github.ref_name == 'test/nethernet-rebind-preflight-20261102' &&
+      github.event.before == '0000000000000000000000000000000000000000' &&
+      github.event.after == github.sha &&
+      github.event.head_commit.message == 'test(bds): isolate nethernet port reuse [20261102]'
+    name: NetherNet port rebind single-use preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Prepare pinned Endstone server
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv-server
+          .venv-server/bin/python -m pip install 'endstone==0.11.14'
+          test "$(.venv-server/bin/python -c 'import sys; print(".".join(map(str,sys.version_info[:2])))')" = '3.13'
+      - name: Download pinned pure protocol artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-pure
+          repository: ReallocAll/bedrock-protocol
+          run-id: 41009758882
+          github-token: ${{ secrets.REPO_DEVELOP }}
+          path: dependencies/pure
+      - name: Download pinned native protocol artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-native-Linux
+          repository: ReallocAll/bedrock-protocol
+          run-id: 41009758882
+          github-token: ${{ secrets.REPO_DEVELOP }}
+          path: dependencies/native
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Execute C TIME_WAIT drain D once
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ github.event.head_commit.id }}" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          python -m venv .venv-client
+          .venv-client/bin/python -m pip install dependencies/pure/*.whl dependencies/native/*.whl \
+            'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a'
+          .venv-client/bin/python -m pip check
+          test "$(.venv-client/bin/python -c 'import importlib.metadata as m;print(m.version("bedrock-protocol-native"))')" = '0.5.0'
+          .venv-client/bin/python nethernet_rebind_preflight.py \
+            --server-python .venv-server/bin/python \
+            --endpilot-commit 1d530f0efbb3b0ac03f0945f2f5d89efa81eee3a
+      - name: Upload isolated rebind preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nethernet-rebind-preflight-20261102
+          path: work/rebind/**
+          if-no-files-found: warn
           retention-days: 14
