@@ -2,14 +2,15 @@
 
 Minimal real-server smoke tests on Ubuntu 24.04 x86-64. Server: **Endstone
 0.11.14 / BDS 1.26.52 / protocol 2193** on Python 3.13. Client: EndPilot
-`73b26f632d4dc6f04f9448bacc1928fedc7b7ff2` (default, overridable) on Python 3.12.
+`f0f9e9a57d1cca142ad5779fa9a3fbccbfbe7ae1` (default, overridable) on Python 3.12.
 
-The client's `bedrock-protocol-native==0.5.0.dev0` is not on PyPI. Use the
+This testbed uses the exact CI-built `bedrock-protocol-native==0.5.0` wheels;
+a durable GitHub Release/PyPI source has not yet replaced the artifact pin. Use the
 CI-verified `python-pure` and `python-native-Linux` CPython 3.12 wheels from
-[bedrock-protocol run 40091787005](https://github.com/ReallocAll/bedrock-protocol/actions/runs/40091787005).
+[bedrock-protocol run 41009758882](https://github.com/ReallocAll/bedrock-protocol/actions/runs/41009758882).
 The workflow downloads these pinned artifacts using read-only cross-repo access.
 The token is passed only to the official GitHub download action.
-These exact upstream Actions artifacts expire **2027-01-22 11:54 UTC**.
+These exact upstream Actions artifacts expire **2027-01-28 05:40 UTC**.
 The upstream `release.yml` already packages the producer's wheels into a draft
 tagged Release, but no published release assets are currently available; move
 to a published producer Release or PyPI before the Artifact expires rather
@@ -24,9 +25,9 @@ python3.13 -m venv .venv-server
 python3.12 -m venv .venv-client
 # Extract the pinned artifacts to dependencies/pure and dependencies/native first.
 .venv-client/bin/python -m pip install dependencies/pure/*.whl dependencies/native/*.whl \
-  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@73b26f632d4dc6f04f9448bacc1928fedc7b7ff2'
+  'endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@f0f9e9a57d1cca142ad5779fa9a3fbccbfbe7ae1'
 .venv-client/bin/python testbed.py --server-python .venv-server/bin/python \
-  --endpilot-commit 73b26f632d4dc6f04f9448bacc1928fedc7b7ff2
+  --endpilot-commit f0f9e9a57d1cca142ad5779fa9a3fbccbfbe7ae1
 ```
 
 Use Actions **Run workflow** with the optional `endpilot_commit` input to test an exact
