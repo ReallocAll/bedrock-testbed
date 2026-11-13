@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ReallocAll/bds-onhit-lifecycle
-          ref: 7e8940dd99a7a209d3fec8a602a784ab67a4b6a2
+          ref: d3c5ad210cf4fdffbcfc526ba3348647288cde28
           path: dependencies/onhit
           persist-credentials: false
       - uses: actions/setup-python@v6
@@ -52,7 +52,14 @@ jobs:
           python onhit_probe.py \
             --server-python .venv-server/bin/python \
             --plugin build-onhit/endstone_onhit_lifecycle.so \
-            --onhit-commit 7e8940dd99a7a209d3fec8a602a784ab67a4b6a2
+            --onhit-commit d3c5ad210cf4fdffbcfc526ba3348647288cde28
+      - name: Export exact ELF ABI evidence without enabling hooks
+        run: |
+          set -euo pipefail
+          mapfile -t binaries < <(find work-onhit/server -type f -name bedrock_server)
+          test "${#binaries[@]}" -eq 1
+          python dependencies/onhit/tools/export_abi_evidence.py "${binaries[0]}" > work-onhit/abi-evidence.txt
+          cat work-onhit/abi-evidence.txt
       - name: Install pinned endstone-bot in the isolated BDS environment
         run: |
           .venv-server/bin/python -m pip install \
