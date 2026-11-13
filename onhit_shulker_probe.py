@@ -111,7 +111,6 @@ def main() -> int:
         # Keep the shulker's target and arena in a ticking chunk. Creation
         # and combat are actual vanilla BDS commands, not mocked callbacks.
         current.command("tickingarea add circle 8 68 8 2 onhit_zone")
-        current.command("fill 2 65 2 14 65 14 stone")
         current.command("time set night")
         created_offset = current.command(
             f"bot createat {BOT_NAME} TestOwner 8 66 8 overworld"
@@ -132,9 +131,40 @@ def main() -> int:
             raise TimeoutError("BDS player list never contained simulated player")
         result["checks"].append("simulated_player_present_in_bds_list")
 
-        for z in (11, 13, 15):
-            current.command(f"summon shulker 8 66 {z}")
-        result["checks"].append("shulker_summon_commands_sent")
+        # A fresh headless world has not generated the target chunk before the
+        # simulated player joins; the earlier pre-join fill/summons correctly
+        # failed with "outside of the world" / "Unable to summon object".
+        # Wait for actual BDS chunk loading, then build above the terrain.
+        time.sleep(3)
+        fill_log = ""
+        for attempt in range(6):
+            offset = current.command("fill 2 220 2 14 220 14 stone")
+            time.sleep(0.8)
+            fill_log = "\n".join(current.snapshot(offset))
+            if "Successfully filled" in fill_log or "blocks filled" in fill_log:
+                break
+            if "outside of the world" in fill_log:
+                time.sleep(2)
+                continue
+            raise AssertionError(f"BDS arena fill unconfirmed: {fill_log[-600:]}")
+        else:
+            raise AssertionError(f"BDS never generated arena chunk: {fill_log[-600:]}")
+        result["checks"].append("arena_blocks_confirmed_placed")
+
+        move = current.command(f"bot moveat {BOT_NAME} 8 221 8 overworld")
+        wait_for_log(current, "已将", timeout=12, start=move)
+        time.sleep(2)
+        result["checks"].append("simulated_player_relocated_to_arena")
+
+        for x, z in ((8, 11), (10, 12), (6, 12)):
+            offset = current.command(f"summon shulker {x} 221 {z}")
+            time.sleep(0.5)
+            response = "\n".join(current.snapshot(offset))
+            if "Unable to summon" in response or "ERROR" in response:
+                raise AssertionError(f"Shulker summon failed: {response[-600:]}")
+            if "Summoned" not in response:
+                raise AssertionError(f"Shulker summon not confirmed: {response[-600:]}")
+        result["checks"].append("shulker_entities_summoned")
 
         deadline = time.monotonic() + 65
         queries = 0
