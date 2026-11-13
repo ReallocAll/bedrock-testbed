@@ -162,7 +162,7 @@ def main() -> int:
             response = "\n".join(current.snapshot(offset))
             if "Unable to summon" in response or "ERROR" in response:
                 raise AssertionError(f"Shulker summon failed: {response[-600:]}")
-            if "Summoned" not in response:
+            if "successfully summoned" not in response.lower():
                 raise AssertionError(f"Shulker summon not confirmed: {response[-600:]}")
         result["checks"].append("shulker_entities_summoned")
 
