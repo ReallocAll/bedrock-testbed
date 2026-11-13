@@ -152,7 +152,7 @@ def main() -> int:
         result["checks"].append("arena_blocks_confirmed_placed")
 
         move = current.command(f"bot moveat {BOT_NAME} 8 221 8 overworld")
-        wait_for_log(current, "已将", timeout=12, start=move)
+        wait_for_log(current, f"已移动 {BOT_NAME}", timeout=12, start=move)
         time.sleep(2)
         result["checks"].append("simulated_player_relocated_to_arena")
 
