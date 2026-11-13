@@ -33,7 +33,7 @@ ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 class Server:
-    def __init__(self, python: Path, folder: Path, logfile: Path):
+    def __init__(self, python: Path, folder: Path, logfile: Path, *,\n                 expected_endstone: str = "0.11.14", expected_bds: str = "26.52"):
         self.folder = folder
         self.logfile = logfile
         self.process = None
@@ -42,6 +42,8 @@ class Server:
         self.thread = None
         self.stream = None
         self.python = python
+        self.expected_endstone = expected_endstone
+        self.expected_bds = expected_bds
 
     def start(self):
         self.lines = []
@@ -73,11 +75,13 @@ class Server:
         while time.monotonic() < deadline:
             lines = self.snapshot()
             if any("server started" in line.lower() for line in lines):
-                if VERSION_LINE not in "\n".join(lines):
-                    raise RuntimeError("BDS Ready but Endstone/version line does not match 0.11.14/26.52")
+                version_line = (f"This server is running Endstone version: {self.expected_endstone} "
+                                f"(Minecraft: {self.expected_bds})")
+                if version_line not in "\n".join(lines):
+                    raise RuntimeError(f"BDS Ready but expected version line missing: {version_line}")
                 version_path = self.folder / "version.txt"
-                if not version_path.is_file() or version_path.read_text().strip() != "26.52":
-                    raise RuntimeError("BDS version.txt is missing or does not equal 26.52")
+                if not version_path.is_file() or version_path.read_text().strip() != self.expected_bds:
+                    raise RuntimeError(f"BDS version.txt is missing or does not equal {self.expected_bds}")
                 return
             if self.process.poll() is not None:
                 raise RuntimeError(f"BDS exited before Ready (code={self.process.returncode})")
