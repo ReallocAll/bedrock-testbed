@@ -33,7 +33,8 @@ ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 class Server:
-    def __init__(self, python: Path, folder: Path, logfile: Path, *,\n                 expected_endstone: str = "0.11.14", expected_bds: str = "26.52"):
+    def __init__(self, python: Path, folder: Path, logfile: Path, *,
+                 expected_endstone: str = "0.11.14", expected_bds: str = "26.52"):
         self.folder = folder
         self.logfile = logfile
         self.process = None
