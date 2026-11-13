@@ -1,0 +1,60 @@
+name: Isolated OnHit BDS acceptance
+
+on:
+  push:
+    branches: [experiment/onhit-shulker]
+
+permissions:
+  contents: read
+
+jobs:
+  onhit:
+    name: Exact BDS and passive native plugin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ReallocAll/bds-onhit-lifecycle
+          ref: 7e8940dd99a7a209d3fec8a602a784ab67a4b6a2
+          path: dependencies/onhit
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install Endstone 0.11.15 in isolated server environment
+        run: |
+          python -m venv .venv-server
+          .venv-server/bin/python -m pip install 'endstone==0.11.15'
+      - name: Install official native build toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            clang-18 lld-18 libc++-18-dev libc++abi-18-dev \
+            ninja-build libssl-dev
+      - name: Build pinned OnHit diagnostic plugin (detours disabled)
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: |
+          cmake -S dependencies/onhit -B build-onhit -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_CXX_FLAGS=-stdlib=libc++ \
+            -DONHIT_BUILD_PLUGIN=ON \
+            -DONHIT_BUILD_TESTS=OFF \
+            -DONHIT_ENABLE_EXPERIMENTAL_HOOKS=OFF
+          cmake --build build-onhit --parallel 2
+      - name: Run exact BDS bootstrap and native plugin acceptance
+        run: |
+          python onhit_probe.py \
+            --server-python .venv-server/bin/python \
+            --plugin build-onhit/endstone_onhit_lifecycle.so \
+            --onhit-commit 7e8940dd99a7a209d3fec8a602a784ab67a4b6a2
+      - name: Display acceptance evidence on failure or success
+        if: always()
+        run: |
+          if test -f work-onhit/result.json; then cat work-onhit/result.json; fi
+          if test -f work-onhit/bds.log; then tail -n 70 work-onhit/bds.log; fi
