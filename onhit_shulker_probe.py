@@ -69,6 +69,7 @@ def main() -> int:
         # The first bot-enabled start installs its behavior pack and emits the
         # exact-world offline patch script. Never delete this world afterward.
         current = start()
+        wait_for_log(current, "Bot 已启用：SimulatedPlayer only", timeout=15)
         initial = "\n".join(current.snapshot())
         if "Loading bot" not in initial and "Enabling bot" not in initial:
             raise RuntimeError("endstone-bot entrypoint was not loaded")
