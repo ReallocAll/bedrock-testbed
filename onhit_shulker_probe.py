@@ -371,17 +371,22 @@ def main() -> int:
         result["checks"].append("simulated_player_shulker_projectile_damage_observed")
         result["memory_after_contact_kib"] = bds_memory_kib(current, folder)
         if args.stress_rounds:
-            if not 1 <= args.stress_rounds <= 300:
-                raise ValueError("stress-rounds must be between 1 and 300")
+            if not 1 <= args.stress_rounds <= 100:
+                raise ValueError("stress-rounds must be between 1 and 100")
             snapshots = []
+            # Keep the survival target alive long enough for real Shulker AI
+            # to fire. Rapid summon+kill never entered native OnHit parse.
+            current.command(f"effect {BOT_NAME} regeneration 600 20 true")
             for round_no in range(1, args.stress_rounds + 1):
+                current.command(f"bot moveat {BOT_NAME} 8 221 8 overworld")
                 for x, z in ((8, 11), (10, 12), (6, 12)):
                     current.command(f"summon shulker {x} 221 {z}")
-                time.sleep(0.3)
+                    time.sleep(0.1)
+                time.sleep(7)
                 current.command("kill @e[type=shulker]")
                 current.command("kill @e[type=shulker_bullet]")
-                if round_no % 10 == 0:
-                    time.sleep(0.4)
+                time.sleep(0.4)
+                if round_no % 3 == 0:
                     if current.process is None or current.process.poll() is not None:
                         raise RuntimeError(f"BDS died during stress round {round_no}")
                     snapshots.append({"round": round_no,
@@ -389,7 +394,7 @@ def main() -> int:
             result["stress_rounds"] = args.stress_rounds
             result["stress_summons_sent"] = args.stress_rounds * 3
             result["stress_memory_snapshots"] = snapshots
-            result["checks"].append("fixed_count_shulker_spawn_cleanup_stress")
+            result["checks"].append("sustained_shulker_bullet_workload")
         time.sleep(5)
         result["memory_after_combat_kib"] = bds_memory_kib(current, folder)
         current.stop()
@@ -433,6 +438,8 @@ def main() -> int:
             result["fix_reclaimed"] = int(marker.split("reclaimed=", 1)[1])
             if args.fix_candidate != ("#fix_candidate=1" in marker):
                 raise AssertionError(f"Fix candidate mode mismatch: {marker}")
+            if args.stress_rounds and parse_enter < args.stress_rounds:
+                raise AssertionError(f"Insufficient native Parse entries during sustained projectile load: {parse_enter}")
             if parse_enter < 1 or parse_exit < 1 or parse_enter != parse_exit:
                 raise AssertionError(
                     f"Native parse trampoline mismatch: enter={parse_enter} "
