@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -38,6 +39,7 @@ def main() -> int:
     parser.add_argument("--server-python", type=Path, required=True)
     args = parser.parse_args()
     python = args.server_python.absolute()
+    os.environ["BDS_ONHIT_CONTACT_PROBE"] = "I_CONFIRM_ISOLATED_BDS"
     work = ROOT / "work-onhit"
     folder = work / "server"
     logfile = work / "bds.log"
@@ -100,6 +102,8 @@ def main() -> int:
         result["checks"].append("normal_difficulty_configured")
 
         current = start()
+        wait_for_log(current, "ONHIT_CONTACT_PROBE_READY", timeout=20)
+        result["checks"].append("native_passive_contact_oracle_registered")
         wait_for_log(current, "standalone SimulatedPlayer 功能可用", timeout=50)
         status_offset = current.command("bot status")
         status = "\n".join(wait_for_log(current, "protocol 3", timeout=12,
@@ -190,6 +194,33 @@ def main() -> int:
                 "command syntax, shulker AI, target visibility and bot game mode"
             )
         result["checks"].append("real_shulker_bullet_entity_observed")
+
+        # Bullet existence is not a hit. Require an independent Endstone
+        # ActorDamageEvent from the simulated player whose direct source is a
+        # shulker bullet, rather than inferring contact from entity presence.
+        contact_deadline = time.monotonic() + 65
+        contact_line = ""
+        while time.monotonic() < contact_deadline:
+            for line in current.snapshot():
+                if ("ONHIT_CONTACT receiver=" + BOT_NAME) in line and (
+                    "direct=minecraft:shulker_bullet" in line or
+                    "direct=shulker_bullet" in line
+                ):
+                    contact_line = line
+                    break
+            if contact_line:
+                break
+            if current.process is None or current.process.poll() is not None:
+                raise RuntimeError("BDS exited before a confirmed projectile hit")
+            time.sleep(0.25)
+        result["contact_observed"] = bool(contact_line)
+        if not contact_line:
+            raise AssertionError(
+                "A real shulker_bullet existed, but no target damage from a "
+                "shulker_bullet was independently observed within 65 seconds"
+            )
+        result["contact_evidence"] = contact_line
+        result["checks"].append("simulated_player_shulker_projectile_damage_observed")
         current.stop()
         current = None
         result["checks"].append("shulker_scenario_graceful_stop")
