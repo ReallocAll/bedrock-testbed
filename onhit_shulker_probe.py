@@ -48,7 +48,30 @@ def bds_memory_kib(server: Server, folder: Path) -> dict[str, int]:
     return fields
 
 
-def wait_for_log(server: Server, expected: str, *, timeout: float,
+
+def heap_snapshot(stage: str, work: Path) -> dict:
+    """Request a synchronized jemalloc dump from the live BDS process."""
+    prefix = work / "heap" / "onhit"
+    path = Path(f"{prefix}.{stage}.heap")
+    done = Path(f"{prefix}.{stage}.done")
+    control = work / "heap" / "request"
+    if control.exists() or done.exists() or path.exists():
+        raise RuntimeError(f"Stale heap profiling request: {stage}")
+    control.write_text(stage + "\n", encoding="ascii")
+    deadline = time.monotonic() + 50
+    while time.monotonic() < deadline and not done.exists():
+        time.sleep(0.2)
+    if not done.exists():
+        raise TimeoutError(f"jemalloc profile dump not acknowledged: {stage}")
+    status = done.read_text().strip()
+    if ("config=0:1" not in status or "opt=0:1" not in status
+            or "lg=0:10" not in status or "active=0" not in status
+            or "dump=0" not in status or not path.is_file()
+            or path.stat().st_size < 20):
+        raise RuntimeError(f"Invalid jemalloc profile: {stage}, {status}")
+    return {"stage": stage, "mallctl": status, "bytes": path.stat().st_size}
+
+def wait_for_log(server: Server, expected: str, *, timeout: float:
                  start: int = 0) -> list[str]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -142,6 +165,8 @@ def main() -> int:
     parser.add_argument("--native-gdb", action="store_true")
     parser.add_argument("--stress-rounds", type=int, default=0,
                         help="Repeat fixed-size Shulker spawn/cleanup workload")
+    parser.add_argument("--heap-profile", action="store_true",
+                        help="Use isolated jemalloc 5.4.0 profiling snapshots")
     parser.add_argument("--fix-candidate", action="store_true",
                         help="Enable isolated parse-reclaim candidate for A/B job")
     parser.add_argument("--hook-plugin", type=Path)
@@ -234,7 +259,35 @@ def main() -> int:
                 os.environ.pop("BDS_ONHIT_FIX_CANDIDATE", None)
             result["checks"].append("isolated_parse_only_funchook_binary_selected")
 
+        if args.heap_profile:
+            if args.hook_plugin is None or args.stress_rounds != 24:
+                raise ValueError("Heap profiling requires active hooks and 24 rounds")
+            jemalloc = (ROOT / "jemalloc-install" / "lib" / "libjemalloc.so.2").resolve()
+            trigger = (ROOT / "libonhit_heap_trigger.so").resolve()
+            if not jemalloc.is_file() or not trigger.is_file():
+                raise FileNotFoundError("Pinned profiling allocator or trigger missing")
+            heap_dir = work / "heap"
+            heap_dir.mkdir(exist_ok=True)
+            os.environ["LD_PRELOAD"] = f"{jemalloc}:{trigger}"
+            os.environ["MALLOC_CONF"] = (
+                "prof:true,prof_active:false,lg_prof_sample:10,"
+                "prof_final:false,prof_leak:false")
+            os.environ["BDS_ONHIT_HEAP_CONTROL"] = str(heap_dir / "request")
+            os.environ["BDS_ONHIT_HEAP_PREFIX"] = str(heap_dir / "onhit")
+            result["heap_allocator_version"] = "jemalloc 5.4.0"
+            result["heap_lg_prof_sample"] = 10
         current = start()
+        if args.heap_profile:
+            parent = current.process.pid
+            children = [int(x) for x in Path(
+                f"/proc/{parent}/task/{parent}/children").read_text().split()]
+            bds = [pid for pid in children
+                   if Path(f"/proc/{pid}/exe").resolve() ==
+                   (folder / "bedrock_server").resolve()]
+            if len(bds) != 1 or str(jemalloc) not in Path(
+                    f"/proc/{bds[0]}/maps").read_text():
+                raise RuntimeError("jemalloc 5.4.0 not mapped in BDS")
+            result["heap_allocator_mapped"] = True
         if args.hook_plugin is not None:
             wait_for_log(current,
                          "EXPERIMENTAL OnHit " +
@@ -370,6 +423,8 @@ def main() -> int:
         result["contact_evidence"] = contact_line
         result["checks"].append("simulated_player_shulker_projectile_damage_observed")
         result["memory_after_contact_kib"] = bds_memory_kib(current, folder)
+        if args.heap_profile:
+            result["heap_dump_acks"] = [heap_snapshot("warmup", work)]
         if args.stress_rounds:
             if not 1 <= args.stress_rounds <= 100:
                 raise ValueError("stress-rounds must be between 1 and 100")
@@ -386,6 +441,9 @@ def main() -> int:
                 current.command("kill @e[type=shulker]")
                 current.command("kill @e[type=shulker_bullet]")
                 time.sleep(0.4)
+                if args.heap_profile and round_no in (12, 24):
+                    result["heap_dump_acks"].append(
+                        heap_snapshot(f"round{round_no}", work))
                 if round_no % 3 == 0:
                     if current.process is None or current.process.poll() is not None:
                         raise RuntimeError(f"BDS died during stress round {round_no}")
@@ -457,6 +515,25 @@ def main() -> int:
                 raise AssertionError("No verified native parse entry or debugger failure; "
                                      "see work-onhit/native-entry-gdb.log")
             result["checks"].append("exact_native_parse_entry_breakpoint_hit")
+        if args.heap_profile:
+            sys.path.insert(0, str(ROOT / "dependencies" / "onhit" / "tools"))
+            from heap_v2_summary import snapshot
+            samples = {
+                stage: snapshot(work / "heap" / f"onhit.{stage}.heap", 0x71439E0)
+                for stage in ("warmup", "round12", "round24")
+            }
+            metrics = ("target_sampled_count",
+                       "target_weighted_inuse_space_bytes",
+                       "sampled_count", "weighted_inuse_space_bytes")
+            result["heap_snapshots"] = samples
+            result["heap_deltas"] = {
+                stage: {
+                    key: round(samples[stage][key] - samples["warmup"][key], 3)
+                    for key in metrics
+                }
+                for stage in ("round12", "round24")
+            }
+            result["checks"].append("jemalloc_5_4_0_heap_v2_snapshots_parsed")
         result["status"] = "PASS"
     except BaseException as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"

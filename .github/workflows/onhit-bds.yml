@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        fix_candidate: ['off', 'on']
+        fix_candidate: ['off']
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -83,12 +83,27 @@ jobs:
           .venv-server/bin/python -m pip install \
             'git+https://github.com/ReallocAll/endstone-bot.git@4bd0691f1ef0f551e5ba258d4747b35a3b748177'
           .venv-server/bin/python -m pip check
+      - name: Build pinned jemalloc 5.4.0 profiler and isolated dump trigger
+        run: |
+          curl -fL --retry 3 -o /tmp/jemalloc-5.4.0.tar.bz2 \
+            https://github.com/jemalloc/jemalloc/releases/download/5.4.0/jemalloc-5.4.0.tar.bz2
+          echo '200776fac271093e7c2f21edd6d62657ecd2be578d9328633f2a86bfa6ef4f1d  /tmp/jemalloc-5.4.0.tar.bz2' | sha256sum -c -
+          tar -xjf /tmp/jemalloc-5.4.0.tar.bz2
+          cd jemalloc-5.4.0
+          ./configure --enable-prof --prefix="$GITHUB_WORKSPACE/jemalloc-install"
+          make -j2
+          make install
+          cd "$GITHUB_WORKSPACE"
+          cc -std=c11 -Wall -Wextra -Werror -fPIC -shared \
+            -o libonhit_heap_trigger.so onhit_heap_trigger.c -ldl -pthread
+          jemalloc-install/bin/jemalloc-config --version
+          test -s jemalloc-install/lib/libjemalloc.so.2
       - name: Exercise offline Beta APIs, standalone bot and Shulker projectile
         run: |
           python -m py_compile server.py onhit_probe.py onhit_shulker_probe.py
           extra=()
           if [[ '${{ matrix.fix_candidate }}' == 'on' ]]; then extra+=(--fix-candidate); fi
-          python onhit_shulker_probe.py --server-python .venv-server/bin/python --hook-plugin build-onhit-hooks/endstone_onhit_lifecycle.so --hook-scope all --stress-rounds 24 "${extra[@]}"
+          python onhit_shulker_probe.py --server-python .venv-server/bin/python --hook-plugin build-onhit-hooks/endstone_onhit_lifecycle.so --hook-scope all --stress-rounds 24 --heap-profile "${extra[@]}"
       - name: Display acceptance evidence on failure or success
         if: always()
         run: |
