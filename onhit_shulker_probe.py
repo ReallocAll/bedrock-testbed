@@ -1,13 +1,14 @@
-"""Continue the passive BDS test with a preserved-world endstone-bot trigger.
+"""Run preserved-world endstone-bot trigger after passive BDS acceptance.
 
-No native detours. All writes are confined to work-onhit/server on an
-ephemeral, isolated GitHub-hosted standard runner.
+Optional one-hook funchook variant runs only in this ephemeral isolated runner.
+No production access. The passive and active binaries are built separately.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -114,7 +115,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--server-python", type=Path, required=True)
     parser.add_argument("--native-gdb", action="store_true")
+    parser.add_argument("--hook-plugin", type=Path)
     args = parser.parse_args()
+    if args.native_gdb and args.hook_plugin:
+        parser.error("--native-gdb and --hook-plugin are mutually exclusive")
     python = args.server_python.absolute()
     os.environ["BDS_ONHIT_CONTACT_PROBE"] = "I_CONFIRM_ISOLATED_BDS"
     work = ROOT / "work-onhit"
@@ -180,7 +184,22 @@ def main() -> int:
         properties.write_text(before.replace("difficulty=peaceful", "difficulty=normal"))
         result["checks"].append("normal_difficulty_configured")
 
+        if args.hook_plugin is not None:
+            # Only replace the plugin after the passive/Beta boot has stopped.
+            # No live binary replacement, dynamic module reload or production use.
+            hook_plugin = args.hook_plugin.absolute()
+            if not hook_plugin.is_file() or not hook_plugin.stat().st_size:
+                raise FileNotFoundError(f"Isolated hook plugin unavailable: {hook_plugin}")
+            shutil.copyfile(hook_plugin,
+                            folder / "plugins" / "endstone_onhit_lifecycle.so")
+            os.environ["BDS_ONHIT_ISOLATED_TEST"] = "I_CONFIRM_ISOLATED_BDS"
+            result["checks"].append("isolated_parse_only_funchook_binary_selected")
+
         current = start()
+        if args.hook_plugin is not None:
+            wait_for_log(current, "EXPERIMENTAL OnHit parse-only hook active", timeout=15)
+            result["onhit_hooks_enabled"] = True
+            result["checks"].append("native_funchook_parse_installed")
         wait_for_log(current, "ONHIT_CONTACT_PROBE_READY", timeout=20)
         result["checks"].append("native_passive_contact_oracle_registered")
         wait_for_log(current, "standalone SimulatedPlayer 功能可用", timeout=50)
@@ -307,6 +326,27 @@ def main() -> int:
         current.stop()
         current = None
         result["checks"].append("shulker_scenario_graceful_stop")
+        if args.hook_plugin is not None:
+            traces = sorted((folder / "plugins").rglob("trace.tsv"))
+            if len(traces) != 1:
+                raise AssertionError(f"Expected one onDisable hook trace: {traces}")
+            lines = [line for line in traces[0].read_text().splitlines()
+                     if line and not line.startswith("#")]
+            if not lines or not lines[0].startswith("sequence\tkind\t"):
+                raise AssertionError("Hook trace has no valid TSV header")
+            entries = [row.split("\t") for row in lines[1:]]
+            parse_enter = sum(row[1] == "1" for row in entries if len(row) >= 6)
+            parse_exit = sum(row[1] == "2" for row in entries if len(row) >= 6)
+            result["funchook_parse_enter"] = parse_enter
+            result["funchook_parse_exit"] = parse_exit
+            result["funchook_trace_rows"] = len(entries)
+            result["funchook_trace_header"] = traces[0].read_text().splitlines()[:2]
+            if parse_enter < 1 or parse_exit < 1 or parse_enter != parse_exit:
+                raise AssertionError(
+                    f"Native parse trampoline mismatch: enter={parse_enter} "
+                    f"exit={parse_exit}; rows={len(entries)}"
+                )
+            result["checks"].append("native_parse_detour_enter_exit_traced")
         if args.native_gdb:
             assert gdb_process is not None and gdb_log is not None
             gdb_process.wait(timeout=12)
