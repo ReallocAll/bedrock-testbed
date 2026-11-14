@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   onhit:
-    name: Exact BDS and passive native plugin
+    name: Exact BDS passive gate and isolated parse-only funchook
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ReallocAll/bds-onhit-lifecycle
-          ref: faf85417c1509db9512bac235f9781fece273b3f
+          ref: 6d174242bc8b7724b47cccb5253ebb5f945efb87
           path: dependencies/onhit
           persist-credentials: false
       - uses: actions/setup-python@v6
@@ -34,7 +34,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             clang-18 lld-18 libc++-18-dev libc++abi-18-dev \
-            ninja-build libssl-dev gdb
+            ninja-build libssl-dev
       - name: Build pinned OnHit diagnostic plugin (detours disabled)
         env:
           CC: clang-18
@@ -52,7 +52,7 @@ jobs:
           python onhit_probe.py \
             --server-python .venv-server/bin/python \
             --plugin build-onhit/endstone_onhit_lifecycle.so \
-            --onhit-commit faf85417c1509db9512bac235f9781fece273b3f
+            --onhit-commit 6d174242bc8b7724b47cccb5253ebb5f945efb87
       - name: Export exact ELF ABI evidence without enabling hooks
         run: |
           set -euo pipefail
@@ -60,6 +60,20 @@ jobs:
           test "${#binaries[@]}" -eq 1
           python dependencies/onhit/tools/export_abi_evidence.py "${binaries[0]}" > work-onhit/abi-evidence.txt
           cat work-onhit/abi-evidence.txt
+      - name: Build isolated parse-only funchook variant with pinned upstream source
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: |
+          cmake -S dependencies/onhit -B build-onhit-hooks -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_CXX_FLAGS=-stdlib=libc++ \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DONHIT_BUILD_PLUGIN=ON \
+            -DONHIT_BUILD_TESTS=OFF \
+            -DONHIT_ENABLE_EXPERIMENTAL_HOOKS=ON
+          cmake --build build-onhit-hooks --parallel 2
+          test -s build-onhit-hooks/endstone_onhit_lifecycle.so
       - name: Install pinned endstone-bot in the isolated BDS environment
         run: |
           .venv-server/bin/python -m pip install \
@@ -68,11 +82,11 @@ jobs:
       - name: Exercise offline Beta APIs, standalone bot and Shulker projectile
         run: |
           python -m py_compile server.py onhit_probe.py onhit_shulker_probe.py
-          python onhit_shulker_probe.py --server-python .venv-server/bin/python --native-gdb
+          python onhit_shulker_probe.py --server-python .venv-server/bin/python --hook-plugin build-onhit-hooks/endstone_onhit_lifecycle.so
       - name: Display acceptance evidence on failure or success
         if: always()
         run: |
           if test -f work-onhit/result.json; then cat work-onhit/result.json; fi
           if test -f work-onhit/shulker_result.json; then cat work-onhit/shulker_result.json; fi
-          if test -f work-onhit/native-entry-gdb.log; then tail -n 35 work-onhit/native-entry-gdb.log; fi
+          find work-onhit/server/plugins -name trace.tsv -type f -exec sh -c 'head -n 5 "$1"; wc -l "$1"' sh '{}' \; || true
           if test -f work-onhit/bds.log; then tail -n 70 work-onhit/bds.log; fi
