@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   onhit:
-    name: OnHit bounded nonempty-copy ownership observation
+    name: OnHit live-target recreation with cleanup reclaim
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ReallocAll/bds-onhit-lifecycle
-          ref: f450a8f9bb06d2f780b24659a350ae65bfac0809
+          ref: c990e0a622924b14e2969c82f1f299f09d26d57d
           path: dependencies/onhit
           persist-credentials: false
       - uses: actions/setup-python@v6
@@ -34,7 +34,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             clang-18 lld-18 libc++-18-dev libc++abi-18-dev \
-            ninja-build libssl-dev gdb
+            ninja-build libssl-dev
       - name: Build pinned OnHit diagnostic plugin (detours disabled)
         env:
           CC: clang-18
@@ -52,7 +52,7 @@ jobs:
           python onhit_probe.py \
             --server-python .venv-server/bin/python \
             --plugin build-onhit/endstone_onhit_lifecycle.so \
-            --onhit-commit f450a8f9bb06d2f780b24659a350ae65bfac0809
+            --onhit-commit c990e0a622924b14e2969c82f1f299f09d26d57d
       - name: Export exact ELF ABI evidence without enabling hooks
         run: |
           set -euo pipefail
@@ -67,12 +67,8 @@ jobs:
           test "${#binaries[@]}" -eq 1
           echo "=== Original Cleanup 0x7757840..0x7757940 ==="
           objdump -d -M intel --show-raw-insn --start-address=0x7757840 --stop-address=0x7757940 "${binaries[0]}"
-          echo "=== Nonempty source record copy 0x7757f60..0x7758100 ==="
-          objdump -d -M intel --show-raw-insn --start-address=0x7757f60 --stop-address=0x7758100 "${binaries[0]}"
-          echo "=== Copy caller 0x7756b80..0x7756c10 ==="
-          objdump -d -M intel --show-raw-insn --start-address=0x7756b80 --stop-address=0x7756c10 "${binaries[0]}"
-          echo "=== Dispatch 0x7757e30..0x7757f50 ==="
-          objdump -d -M intel --show-raw-insn --start-address=0x7757e30 --stop-address=0x7757f50 "${binaries[0]}"
+          echo "=== Shallow-copy path 0x7757f60..0x7757fd0 ==="
+          objdump -d -M intel --show-raw-insn --start-address=0x7757f60 --stop-address=0x7757fd0 "${binaries[0]}"
       - name: Build isolated parse-only funchook variant with pinned upstream source
         env:
           CC: clang-18
@@ -95,7 +91,7 @@ jobs:
       - name: Exercise offline Beta APIs, standalone bot and Shulker projectile
         run: |
           python -m py_compile server.py onhit_probe.py onhit_shulker_probe.py
-          python onhit_shulker_probe.py --server-python .venv-server/bin/python --hook-plugin build-onhit-hooks/endstone_onhit_lifecycle.so --hook-scope all --stress-rounds 6 --alias-probe --native-gdb --recreate-target
+          python onhit_shulker_probe.py --server-python .venv-server/bin/python --hook-plugin build-onhit-hooks/endstone_onhit_lifecycle.so --hook-scope all --stress-rounds 6 --fix-candidate --recreate-target
       - name: Display acceptance evidence on failure or success
         if: always()
         run: |
@@ -103,4 +99,3 @@ jobs:
           if test -f work-onhit/shulker_result.json; then cat work-onhit/shulker_result.json; fi
           find work-onhit/server/plugins -name trace.tsv -type f -exec sh -c 'head -n 5 "$1"; wc -l "$1"' sh '{}' \; || true
           if test -f work-onhit/bds.log; then tail -n 70 work-onhit/bds.log; fi
-          if test -f work-onhit/native-entry-gdb.log; then cat work-onhit/native-entry-gdb.log; fi
