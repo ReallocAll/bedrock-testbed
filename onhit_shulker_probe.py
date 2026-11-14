@@ -556,6 +556,40 @@ def main() -> int:
                         )
                 result["funchook_lifecycle"] = extra
                 result["checks"].append("reset_cleanup_detours_enter_exit_traced")
+            # Bounded, post-shutdown address comparison only: an address repeat
+            # can also be allocator reuse, not proof of simultaneous alias owners.
+            if args.fix_candidate and args.hook_scope == "all":
+                seen = {}
+                repeats = []
+                snapshot_rows = 0
+                incomplete = 0
+                for row in entries:
+                    if len(row) < 16 or row[1] != "5":
+                        continue
+                    if row[14] != "1":
+                        incomplete += 1
+                        continue
+                    snapshot_rows += 1
+                    record = row[5]
+                    count = int(row[13])
+                    pointers = [p for p in row[15].split(",") if p and p != "0"]
+                    if len(pointers) < count:
+                        incomplete += 1
+                    for ptr in pointers:
+                        previous = seen.setdefault(ptr, record)
+                        if previous != record:
+                            repeats.append({"pointer": ptr, "first_record": previous,
+                                            "later_record": record})
+                result["cleanup_pointer_probe"] = {
+                    "valid_snapshots": snapshot_rows,
+                    "incomplete_snapshots": incomplete,
+                    "cross_record_address_repeats": len(repeats),
+                    "repeat_examples": repeats[:6],
+                    "interpretation": "address repeats do not prove overlapping lifetimes"
+                }
+                if snapshot_rows == 0:
+                    raise AssertionError("No cleanup child-pointer snapshots captured")
+                result["checks"].append("cleanup_child_pointer_snapshots_captured")
             headers = traces[0].read_text().splitlines()[:3]
             result["funchook_trace_header"] = headers
             marker = next((x for x in headers if x.startswith("#fix_candidate=")), "")
