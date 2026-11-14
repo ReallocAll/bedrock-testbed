@@ -661,13 +661,13 @@ def main() -> int:
                 stamps = [int(line.split()[-1]) for line in output
                           if line.startswith("ONHIT_ALIAS_CAPTURE_NS ")]
                 children = [int(m.group(1), 16) for line in output
-                            if (m := re.search(r"ONHIT_ALIAS_CHILD idx=\\d+ ptr=0x([0-9a-f]+)", line))]
+                            if (m := re.search(r"ONHIT_ALIAS_CHILD idx=\d+ ptr=0x([0-9a-f]+)", line))]
                 result["alias_gdb_copy_evidence"] = copies[:1]
                 result["alias_gdb_children"] = [hex(x) for x in children]
                 if not copies:
                     result["alias_verdict"] = "INCONCLUSIVE_NO_NONEMPTY_COPY"
                 else:
-                    found = re.search(r"src=0x([0-9a-f]+) dst=0x([0-9a-f]+) count=(\\d+)", copies[0])
+                    found = re.search(r"src=0x([0-9a-f]+) dst=0x([0-9a-f]+) count=(\d+)", copies[0])
                     if found is None or not stamps or not children:
                         raise AssertionError("Incomplete one-shot GDB alias evidence")
                     src, dst = int(found.group(1), 16), int(found.group(2), 16)
