@@ -1,0 +1,63 @@
+name: Isolated OnHitFix BDS acceptance
+
+on:
+  push:
+    branches: [experiment/onhit-shulker]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  onhit:
+    name: Exact BDS native Cleanup and commands
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ReallocAll/bds-onhit-lifecycle
+          ref: bb79b92f5c9122cc61a5295810c305508af70bc7
+          path: dependencies/onhit
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install Endstone 0.11.15
+        run: |
+          python -m venv .venv-server
+          .venv-server/bin/python -m pip install 'endstone==0.11.15'
+      - name: Install official toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang-18 lld-18 libc++-18-dev libc++abi-18-dev ninja-build libssl-dev
+      - name: Build OnHitFix once
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: |
+          cmake -S dependencies/onhit -B build-onhit -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS=-stdlib=libc++ -DONHIT_BUILD_PLUGIN=ON -DONHIT_BUILD_TESTS=OFF
+          cmake --build build-onhit --parallel 2
+      - name: Verify exact BDS boot and automatic Cleanup hook
+        run: |
+          python onhit_probe.py --server-python .venv-server/bin/python --plugin build-onhit/endstone_onhitfix.so --onhit-commit 1e30d0c006d66befdf6caa00eaf09fa432ff073c
+      - name: Inspect factory allocation instruction (size evidence only)
+        run: |
+          objdump -d -M intel --start-address=0x71439b0 --stop-address=0x71439f0 work-onhit/server/bedrock_server
+      - name: Install pinned endstone-bot
+        run: |
+          .venv-server/bin/python -m pip install 'git+https://github.com/ReallocAll/endstone-bot.git@4bd0691f1ef0f551e5ba258d4747b35a3b748177'
+          .venv-server/bin/python -m pip check
+      - name: Real Shulker contact, commands, recreation and cleanup
+        run: |
+          python -m py_compile server.py onhit_probe.py onhit_shulker_probe.py
+          python onhit_shulker_probe.py --server-python .venv-server/bin/python --stress-rounds 6 --recreate-target
+      - name: Display acceptance evidence
+        if: always()
+        run: |
+          if test -f work-onhit/result.json; then cat work-onhit/result.json; fi
+          if test -f work-onhit/shulker_result.json; then cat work-onhit/shulker_result.json; fi
+          if test -f work-onhit/bds.log; then tail -n 90 work-onhit/bds.log; fi
