@@ -227,7 +227,7 @@ def main() -> int:
             result["hook_scope"] = args.hook_scope
             result["fix_candidate"] = args.fix_candidate
             if args.fix_candidate:
-                os.environ["BDS_ONHIT_FIX_CANDIDATE"] = "PARSE_RECLAIM"
+                os.environ["BDS_ONHIT_FIX_CANDIDATE"] = "CLEANUP_RECLAIM"
             else:
                 os.environ.pop("BDS_ONHIT_FIX_CANDIDATE", None)
             result["checks"].append("isolated_parse_only_funchook_binary_selected")
