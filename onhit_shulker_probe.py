@@ -71,7 +71,7 @@ def heap_snapshot(stage: str, work: Path) -> dict:
         raise RuntimeError(f"Invalid jemalloc profile: {stage}, {status}")
     return {"stage": stage, "mallctl": status, "bytes": path.stat().st_size}
 
-def wait_for_log(server: Server, expected: str, *, timeout: float:
+def wait_for_log(server: Server, expected: str, *, timeout: float,
                  start: int = 0) -> list[str]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
