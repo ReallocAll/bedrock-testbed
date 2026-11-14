@@ -400,16 +400,15 @@ def main() -> int:
             match = __import__("re").search(r"\bOW\s+0\s+0\s+(\d+)\b", reply)
             return (int(match.group(1)) if match else 0), reply
 
-        def status_count() -> tuple[int, float, str]:
+        def status_count() -> tuple[int, str]:
             offset = current.command("ohf status")
             reply = "\n".join(wait_for_log(current, "Obj del:", timeout=10, start=offset))
             time.sleep(0.15)
             reply = "\n".join(current.snapshot(offset))
             count = __import__("re").search(r"Obj del:\s*(\d+)", reply)
-            mem = __import__("re").search(r"Obj mem:\s*([\d.]+) MiB", reply)
-            if not count or not mem:
+            if not count or "Obj mem:" in reply:
                 raise AssertionError("Malformed /ohf status: " + reply[-700:])
-            return int(count.group(1)), float(mem.group(1)), reply
+            return int(count.group(1)), reply
 
         deadline = time.monotonic() + 65
         first_hit, hit_output = 0, ""
@@ -521,12 +520,11 @@ def main() -> int:
             current.command("kill @e[type=shulker_bullet]")
         time.sleep(5)
         result["memory_after_combat_kib"] = bds_memory_kib(current, folder)
-        deleted, mem_mib, status_output = status_count()
+        deleted, status_output = status_count()
         if deleted <= 0:
             raise AssertionError("Cleanup hook did not call a deleting destructor")
         result["status_output"] = status_output[-600:]
         result["obj_deleted"] = deleted
-        result["obj_mem_mib"] = mem_mib
         result["checks"].append("real_cleanup_deleting_destructor_counted")
         hits, top_output = hit_count()
         if hits <= 0 or "Top 20 Chunks" not in top_output:

@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ReallocAll/bds-onhit-lifecycle
-          ref: 6ffbd2d180fb3304fc1d9b4463eb5a24c9ffc40a
+          ref: 1e30d0c006d66befdf6caa00eaf09fa432ff073c
           path: dependencies/onhit
           persist-credentials: false
       - uses: actions/setup-python@v6
@@ -43,7 +43,7 @@ jobs:
           cmake --build build-onhit --parallel 2
       - name: Verify exact BDS boot and automatic Cleanup hook
         run: |
-          python onhit_probe.py --server-python .venv-server/bin/python --plugin build-onhit/endstone_onhitfix.so --onhit-commit 6ffbd2d180fb3304fc1d9b4463eb5a24c9ffc40a
+          python onhit_probe.py --server-python .venv-server/bin/python --plugin build-onhit/endstone_onhitfix.so --onhit-commit 1e30d0c006d66befdf6caa00eaf09fa432ff073c
       - name: Inspect factory allocation instruction (size evidence only)
         run: |
           objdump -d -M intel --start-address=0x71439b0 --stop-address=0x71439f0 work-onhit/server/bedrock_server
