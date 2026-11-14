@@ -55,13 +55,17 @@ def start_native_entry_probe(server: Server, folder: Path, work: Path):
     loads = set()
     for line in Path(f"/proc/{pid}/maps").read_text().splitlines():
         fields = line.split()
-        if len(fields) >= 6 and fields[-1] == str(expected):
-            begin = int(fields[0].split("-", 1)[0], 16)
-            offset = int(fields[2], 16)
-            loads.add(begin - offset)
+        # PT_LOAD segments have distinct page-aligned mappings; only the
+        # offset-zero map anchors the actual PIE image base.
+        if (len(fields) >= 6 and fields[-1] == str(expected)
+                and int(fields[2], 16) == 0):
+            loads.add(int(fields[0].split("-", 1)[0], 16))
     if len(loads) != 1:
-        raise RuntimeError(f"Could not determine unique BDS ELF load bias: {loads}")
-    entry = loads.pop() + 0x7143660
+        raise RuntimeError(f"Could not determine BDS ELF offset-zero map: {loads}")
+    load_bias = loads.pop()
+    if f"load bias=0x{load_bias:x}" not in "\n".join(server.snapshot()):
+        raise RuntimeError("GDB load bias disagrees with native identity gate")
+    entry = load_bias + 0x7143660
 
     commands = work / "native-entry.gdb"
     commands.write_text(
