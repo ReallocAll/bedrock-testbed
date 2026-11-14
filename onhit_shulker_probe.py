@@ -23,6 +23,31 @@ BOT_NAME = "OnHitTarget"
 BULLET_MARKER = "ONHIT_BULLET_OBSERVED"
 
 
+def bds_memory_kib(server: Server, folder: Path) -> dict[str, int]:
+    """Unadjusted per-process Linux resident memory; NOT retained OnHit bytes."""
+    if server.process is None:
+        raise RuntimeError("No running BDS launcher")
+    parent = server.process.pid
+    pids = [int(x) for x in Path(
+        f"/proc/{parent}/task/{parent}/children").read_text().split()]
+    expected = (folder / "bedrock_server").resolve()
+    matches = [p for p in pids
+               if Path(f"/proc/{p}/exe").resolve() == expected]
+    if len(matches) != 1:
+        raise RuntimeError(f"Expected one BDS process, got {matches}")
+    fields = {}
+    for line in Path(f"/proc/{matches[0]}/smaps_rollup").read_text().splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        parts = value.strip().split()
+        if key in {"Rss", "Pss", "Private_Dirty"} and parts:
+            fields[key] = int(parts[0])
+    if len(fields) != 3:
+        raise RuntimeError(f"Incomplete smaps_rollup fields: {fields}")
+    return fields
+
+
 def wait_for_log(server: Server, expected: str, *, timeout: float,
                  start: int = 0) -> list[str]:
     deadline = time.monotonic() + timeout
@@ -115,6 +140,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--server-python", type=Path, required=True)
     parser.add_argument("--native-gdb", action="store_true")
+    parser.add_argument("--fix-candidate", action="store_true",
+                        help="Enable isolated parse-reclaim candidate for A/B job")
     parser.add_argument("--hook-plugin", type=Path)
     parser.add_argument("--hook-scope", choices=("parse", "all"), default="parse")
     args = parser.parse_args()
@@ -198,6 +225,11 @@ def main() -> int:
             os.environ["BDS_ONHIT_ISOLATED_TEST"] = "I_CONFIRM_ISOLATED_BDS"
             os.environ["BDS_ONHIT_HOOK_SCOPE"] = args.hook_scope
             result["hook_scope"] = args.hook_scope
+            result["fix_candidate"] = args.fix_candidate
+            if args.fix_candidate:
+                os.environ["BDS_ONHIT_FIX_CANDIDATE"] = "PARSE_RECLAIM"
+            else:
+                os.environ.pop("BDS_ONHIT_FIX_CANDIDATE", None)
             result["checks"].append("isolated_parse_only_funchook_binary_selected")
 
         current = start()
@@ -207,6 +239,9 @@ def main() -> int:
                          ("lifecycle" if args.hook_scope == "all" else "parse-only") +
                          " hook active", timeout=15)
             result["onhit_hooks_enabled"] = True
+            if args.fix_candidate:
+                wait_for_log(current, "ONHIT_FIX_CANDIDATE_ENABLED", timeout=15)
+                result["checks"].append("parse_reclaim_candidate_enabled")
             result["checks"].append("native_funchook_parse_installed")
         wait_for_log(current, "ONHIT_CONTACT_PROBE_READY", timeout=20)
         result["checks"].append("native_passive_contact_oracle_registered")
@@ -265,6 +300,7 @@ def main() -> int:
         wait_for_log(current, f"已移动 {BOT_NAME}", timeout=12, start=move)
         time.sleep(2)
         result["checks"].append("simulated_player_relocated_to_arena")
+        result["memory_before_combat_kib"] = bds_memory_kib(current, folder)
 
         if args.native_gdb:
             gdb_process, gdb_log = start_native_entry_probe(current, folder, work)
@@ -331,6 +367,8 @@ def main() -> int:
             )
         result["contact_evidence"] = contact_line
         result["checks"].append("simulated_player_shulker_projectile_damage_observed")
+        time.sleep(5)
+        result["memory_after_combat_kib"] = bds_memory_kib(current, folder)
         current.stop()
         current = None
         result["checks"].append("shulker_scenario_graceful_stop")
@@ -364,7 +402,14 @@ def main() -> int:
                         )
                 result["funchook_lifecycle"] = extra
                 result["checks"].append("reset_cleanup_detours_enter_exit_traced")
-            result["funchook_trace_header"] = traces[0].read_text().splitlines()[:2]
+            headers = traces[0].read_text().splitlines()[:3]
+            result["funchook_trace_header"] = headers
+            marker = next((x for x in headers if x.startswith("#fix_candidate=")), "")
+            if not marker:
+                raise AssertionError("Fix candidate status not recorded in trace")
+            result["fix_reclaimed"] = int(marker.split("reclaimed=", 1)[1])
+            if args.fix_candidate != ("#fix_candidate=1" in marker):
+                raise AssertionError(f"Fix candidate mode mismatch: {marker}")
             if parse_enter < 1 or parse_exit < 1 or parse_enter != parse_exit:
                 raise AssertionError(
                     f"Native parse trampoline mismatch: enter={parse_enter} "
