@@ -165,6 +165,8 @@ def main() -> int:
     parser.add_argument("--native-gdb", action="store_true")
     parser.add_argument("--stress-rounds", type=int, default=0,
                         help="Repeat fixed-size Shulker spawn/cleanup workload")
+    parser.add_argument("--recreate-target", action="store_true",
+                        help="Remove and recreate the live target while a projectile is in flight")
     parser.add_argument("--heap-profile", action="store_true",
                         help="Use isolated jemalloc 5.4.0 profiling snapshots")
     parser.add_argument("--fix-candidate", action="store_true",
@@ -172,6 +174,8 @@ def main() -> int:
     parser.add_argument("--hook-plugin", type=Path)
     parser.add_argument("--hook-scope", choices=("parse", "all"), default="parse")
     args = parser.parse_args()
+    if args.recreate_target and (not args.fix_candidate or args.hook_scope != "all"):
+        parser.error("--recreate-target requires CLEANUP_RECLAIM and full lifecycle hooks")
     if args.native_gdb and args.hook_plugin:
         parser.error("--native-gdb and --hook-plugin are mutually exclusive")
     if args.hook_scope != "parse" and args.hook_plugin is None:
@@ -453,6 +457,70 @@ def main() -> int:
             result["stress_summons_sent"] = args.stress_rounds * 3
             result["stress_memory_snapshots"] = snapshots
             result["checks"].append("sustained_shulker_bullet_workload")
+        if args.recreate_target:
+            # Risk-focused lifetime boundary: replace a live simulated player
+            # while a genuine Shulker projectile exists, then verify a fresh
+            # player can take another real projectile hit.
+            for x, z in ((8, 11), (10, 12), (6, 12)):
+                current.command(f"summon shulker {x} 221 {z}")
+            deadline = time.monotonic() + 40
+            while time.monotonic() < deadline:
+                offset = current.command(
+                    f"execute if entity @e[type=shulker_bullet] run say {BULLET_MARKER}"
+                )
+                time.sleep(0.25)
+                if BULLET_MARKER in "\n".join(current.snapshot(offset)):
+                    break
+                if current.process is None or current.process.poll() is not None:
+                    raise RuntimeError("BDS exited before target recreation")
+            else:
+                raise AssertionError("No live projectile during target-removal boundary")
+            result["checks"].append("live_projectile_before_target_removal")
+
+            current.command(f"bot remove {BOT_NAME}")
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                offset = current.command("list")
+                time.sleep(0.5)
+                if BOT_NAME not in "\n".join(current.snapshot(offset)):
+                    break
+            else:
+                raise AssertionError("SimulatedPlayer still present after bot remove")
+            result["checks"].append("simulated_player_removed_during_projectile_activity")
+
+            offset = current.command(
+                f"bot createat {BOT_NAME} TestOwner 8 221 8 overworld"
+            )
+            wait_for_log(current, f"创建假人 {BOT_NAME}", timeout=20, start=offset)
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                offset = current.command("list")
+                time.sleep(0.5)
+                if BOT_NAME in "\n".join(current.snapshot(offset)):
+                    break
+            else:
+                raise AssertionError("Recreated SimulatedPlayer never joined BDS")
+            current.command(f"effect {BOT_NAME} regeneration 120 20 true")
+            result["checks"].append("recreated_simulated_player_present_in_bds")
+
+            contact_offset = current.command(f"bot moveat {BOT_NAME} 8 221 8 overworld")
+            for x, z in ((8, 11), (10, 12), (6, 12)):
+                current.command(f"summon shulker {x} 221 {z}")
+            deadline = time.monotonic() + 75
+            while time.monotonic() < deadline:
+                fresh = current.snapshot(contact_offset)
+                if any(("ONHIT_CONTACT receiver=" + BOT_NAME) in line and
+                       ("direct=minecraft:shulker_bullet" in line or
+                        "direct=shulker_bullet" in line) for line in fresh):
+                    break
+                if current.process is None or current.process.poll() is not None:
+                    raise RuntimeError("BDS exited during second Shulker encounter")
+                time.sleep(0.25)
+            else:
+                raise AssertionError("No verified projectile damage after target recreation")
+            result["checks"].append("second_real_projectile_contact_after_recreation")
+            current.command("kill @e[type=shulker]")
+            current.command("kill @e[type=shulker_bullet]")
         time.sleep(5)
         result["memory_after_combat_kib"] = bds_memory_kib(current, folder)
         current.stop()
@@ -494,6 +562,8 @@ def main() -> int:
             if not marker:
                 raise AssertionError("Fix candidate status not recorded in trace")
             result["fix_reclaimed"] = int(marker.split("reclaimed=", 1)[1])
+            if args.recreate_target and result["fix_reclaimed"] == 0:
+                raise AssertionError("Cleanup candidate never invoked deleting destructor")
             if args.fix_candidate != ("#fix_candidate=1" in marker):
                 raise AssertionError(f"Fix candidate mode mismatch: {marker}")
             if args.stress_rounds and parse_enter < args.stress_rounds:
