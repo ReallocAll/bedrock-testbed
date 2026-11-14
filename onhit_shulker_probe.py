@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -84,7 +85,7 @@ def wait_for_log(server: Server, expected: str, *, timeout: float,
     raise TimeoutError(f"BDS did not log {expected!r}; last={server.snapshot(start)[-10:]}")
 
 
-def start_native_entry_probe(server: Server, folder: Path, work: Path):
+def start_native_entry_probe(server: Server, folder: Path, work: Path, *, alias_copy=False):
     """Single bounded external breakpoint, independent of C++ function ABI.
 
     GDB detaches itself at the first parse entry. This never changes any BDS
@@ -114,10 +115,36 @@ def start_native_entry_probe(server: Server, folder: Path, work: Path):
     load_bias = loads.pop()
     if f"load bias=0x{load_bias:x}" not in "\n".join(server.snapshot()):
         raise RuntimeError("GDB load bias disagrees with native identity gate")
-    entry = load_bias + 0x7143660
-
-    commands = work / "native-entry.gdb"
-    commands.write_text(
+    entry = load_bias + (0x7757F60 if alias_copy else 0x7143660)
+    if alias_copy:
+        # Only stop at the first entry with a populated source child vector.
+        # The source is live at this exact instruction, unlike a later
+        # cross-record address match that could be allocator reuse.
+        script = (
+            "set pagination off\n"
+            "set confirm off\n"
+            "set print thread-events off\n"
+            f"break *0x{entry:x}\n"
+            "condition 1 *(unsigned long*)($rsi+0x128) > *(unsigned long*)($rsi+0x120) && *(unsigned long*)($rsi+0x120) != 0 && *(unsigned long*)(*(unsigned long*)($rsi+0x120)) != 0\n"
+            "commands 1\n"
+            "  silent\n"
+            "  set $s = $rsi\n"
+            "  set $d = $rdi\n"
+            "  set $b = *(unsigned long*)($s+0x120)\n"
+            "  set $n = (*(unsigned long*)($s+0x128)-$b)/8\n"
+            '  printf "ONHIT_ALIAS_COPY src=0x%lx dst=0x%lx count=%lu begin=0x%lx\\n", $s, $d, $n, $b\n'
+            "  set $i = 0\n"
+            "  while $i < $n && $i < 8\n"
+            '    printf "ONHIT_ALIAS_CHILD idx=%lu ptr=0x%lx\\n", $i, *(unsigned long*)($b+$i*8)\n'
+            "    set $i = $i + 1\n"
+            "  end\n"
+            "  detach\n"
+            "  quit\n"
+            "end\n"
+            "continue\n"
+        )
+    else:
+        script = (
         "set pagination off\n"
         "set confirm off\n"
         "set print thread-events off\n"
@@ -130,7 +157,9 @@ def start_native_entry_probe(server: Server, folder: Path, work: Path):
         "  quit\n"
         "end\n"
         "continue\n"
-    )
+        )
+    commands = work / "native-entry.gdb"
+    commands.write_text(script)
     proc = subprocess.Popen(
         ["sudo", "-n", "gdb", "-q", "-nx", "--batch",
          "-p", str(pid), "-x", str(commands)],
@@ -146,6 +175,9 @@ def start_native_entry_probe(server: Server, folder: Path, work: Path):
             for line in proc.stdout:
                 output.write(line)
                 output.flush()
+                if "ONHIT_ALIAS_COPY" in line:
+                    output.write(f"ONHIT_ALIAS_CAPTURE_NS {time.monotonic_ns()}\n")
+                    output.flush()
                 if "Breakpoint 1 at" in line:
                     ready.set()
 
@@ -163,6 +195,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--server-python", type=Path, required=True)
     parser.add_argument("--native-gdb", action="store_true")
+    parser.add_argument("--alias-probe", action="store_true",
+                        help="One nonempty shallow copy + read-only Cleanup snapshots; no deletion")
     parser.add_argument("--stress-rounds", type=int, default=0,
                         help="Repeat fixed-size Shulker spawn/cleanup workload")
     parser.add_argument("--recreate-target", action="store_true",
@@ -174,10 +208,13 @@ def main() -> int:
     parser.add_argument("--hook-plugin", type=Path)
     parser.add_argument("--hook-scope", choices=("parse", "all"), default="parse")
     args = parser.parse_args()
-    if args.recreate_target and (not args.fix_candidate or args.hook_scope != "all"):
-        parser.error("--recreate-target requires CLEANUP_RECLAIM and full lifecycle hooks")
-    if args.native_gdb and args.hook_plugin:
-        parser.error("--native-gdb and --hook-plugin are mutually exclusive")
+    if args.recreate_target and (not (args.fix_candidate or args.alias_probe) or args.hook_scope != "all"):
+        parser.error("--recreate-target requires full lifecycle hooks and a reclaim or alias probe")
+    if args.native_gdb and args.hook_plugin and not args.alias_probe:
+        parser.error("--native-gdb and --hook-plugin are mutually exclusive except alias probe")
+    if args.alias_probe and (not args.native_gdb or not args.hook_plugin or args.fix_candidate
+                             or args.hook_scope != "all"):
+        parser.error("--alias-probe requires native GDB, full hooks and reclamation OFF")
     if args.hook_scope != "parse" and args.hook_plugin is None:
         parser.error("--hook-scope all requires --hook-plugin")
     python = args.server_python.absolute()
@@ -257,6 +294,7 @@ def main() -> int:
             os.environ["BDS_ONHIT_HOOK_SCOPE"] = args.hook_scope
             result["hook_scope"] = args.hook_scope
             result["fix_candidate"] = args.fix_candidate
+            os.environ["BDS_ONHIT_ALIAS_PROBE"] = "1" if args.alias_probe else "0"
             if args.fix_candidate:
                 os.environ["BDS_ONHIT_FIX_CANDIDATE"] = "CLEANUP_RECLAIM"
             else:
@@ -362,7 +400,8 @@ def main() -> int:
         result["memory_before_combat_kib"] = bds_memory_kib(current, folder)
 
         if args.native_gdb:
-            gdb_process, gdb_log = start_native_entry_probe(current, folder, work)
+            gdb_process, gdb_log = start_native_entry_probe(
+                current, folder, work, alias_copy=args.alias_probe)
             result["checks"].append("external_native_entry_breakpoint_installed")
 
         for x, z in ((8, 11), (10, 12), (6, 12)):
@@ -558,7 +597,7 @@ def main() -> int:
                 result["checks"].append("reset_cleanup_detours_enter_exit_traced")
             # Bounded, post-shutdown address comparison only: an address repeat
             # can also be allocator reuse, not proof of simultaneous alias owners.
-            if args.fix_candidate and args.hook_scope == "all":
+            if (args.fix_candidate or args.alias_probe) and args.hook_scope == "all":
                 seen = {}
                 repeats = []
                 snapshot_rows = 0
@@ -596,7 +635,7 @@ def main() -> int:
             if not marker:
                 raise AssertionError("Fix candidate status not recorded in trace")
             result["fix_reclaimed"] = int(marker.split("reclaimed=", 1)[1])
-            if args.recreate_target and result["fix_reclaimed"] == 0:
+            if args.fix_candidate and args.recreate_target and result["fix_reclaimed"] == 0:
                 raise AssertionError("Cleanup candidate never invoked deleting destructor")
             if args.fix_candidate != ("#fix_candidate=1" in marker):
                 raise AssertionError(f"Fix candidate mode mismatch: {marker}")
@@ -610,15 +649,60 @@ def main() -> int:
             result["checks"].append("native_parse_detour_enter_exit_traced")
         if args.native_gdb:
             assert gdb_process is not None and gdb_log is not None
+            if args.alias_probe and gdb_process.poll() is None:
+                # A missing nonempty copy is an evidence gap, not permission
+                # to rerun indefinitely or fail a valid gameplay experiment.
+                gdb_process.terminate()
             gdb_process.wait(timeout=12)
-            evidence = [line.strip() for line in gdb_log.read_text().splitlines()
-                        if "ONHIT_GDB_PARSE" in line]
-            result["native_parse_entries"] = evidence
+            output = gdb_log.read_text().splitlines()
             result["gdb_exit_code"] = gdb_process.returncode
-            if not evidence or gdb_process.returncode != 0:
-                raise AssertionError("No verified native parse entry or debugger failure; "
-                                     "see work-onhit/native-entry-gdb.log")
-            result["checks"].append("exact_native_parse_entry_breakpoint_hit")
+            if args.alias_probe:
+                copies = [line for line in output if line.startswith("ONHIT_ALIAS_COPY ")]
+                stamps = [int(line.split()[-1]) for line in output
+                          if line.startswith("ONHIT_ALIAS_CAPTURE_NS ")]
+                children = [int(m.group(1), 16) for line in output
+                            if (m := re.search(r"ONHIT_ALIAS_CHILD idx=\\d+ ptr=0x([0-9a-f]+)", line))]
+                result["alias_gdb_copy_evidence"] = copies[:1]
+                result["alias_gdb_children"] = [hex(x) for x in children]
+                if not copies:
+                    result["alias_verdict"] = "INCONCLUSIVE_NO_NONEMPTY_COPY"
+                else:
+                    found = re.search(r"src=0x([0-9a-f]+) dst=0x([0-9a-f]+) count=(\\d+)", copies[0])
+                    if found is None or not stamps or not children:
+                        raise AssertionError("Incomplete one-shot GDB alias evidence")
+                    src, dst = int(found.group(1), 16), int(found.group(2), 16)
+                    if src == dst:
+                        raise AssertionError("Copy entry source equals destination")
+                    observations = []
+                    for row in entries:
+                        if len(row) < 16 or row[1] != "5" or row[14] != "1":
+                            continue
+                        if int(row[2]) < stamps[0] or int(row[5]) not in (src, dst):
+                            continue
+                        matches = sorted(set(children).intersection(
+                            int(x) for x in row[15].split(",") if x and x != "0"))
+                        if matches:
+                            observations.append({
+                                "record": "source" if int(row[5]) == src else "destination",
+                                "sequence": int(row[0]), "timestamp_ns": int(row[2]),
+                                "copied_children_still_present": [hex(x) for x in matches],
+                            })
+                    result["alias_cleanup_observations"] = observations[:20]
+                    identities = {x["record"] for x in observations}
+                    result["alias_verdict"] = (
+                        "DUAL_CLEANUP_RISK" if identities == {"source", "destination"}
+                        else "INCONCLUSIVE_NO_DUAL_CLEANUP_OBSERVED")
+                    result["checks"].append("one_real_nonempty_copy_captured")
+                result["checks"].append("alias_probe_deletion_disabled")
+                if result.get("fix_reclaimed") != 0:
+                    raise AssertionError("Alias observation must not delete any children")
+            else:
+                evidence = [line.strip() for line in output if "ONHIT_GDB_PARSE" in line]
+                result["native_parse_entries"] = evidence
+                if not evidence or gdb_process.returncode != 0:
+                    raise AssertionError("No verified native parse entry or debugger failure; "
+                                         "see work-onhit/native-entry-gdb.log")
+                result["checks"].append("exact_native_parse_entry_breakpoint_hit")
         if args.heap_profile:
             sys.path.insert(0, str(ROOT / "dependencies" / "onhit" / "tools"))
             from heap_v2_summary import snapshot
