@@ -174,14 +174,11 @@ def main() -> int:
     parser.add_argument("--hook-plugin", type=Path)
     parser.add_argument("--hook-scope", choices=("parse", "all"), default="parse")
     args = parser.parse_args()
-    if args.recreate_target and (not args.fix_candidate or args.hook_scope != "all"):
-        parser.error("--recreate-target requires CLEANUP_RECLAIM and full lifecycle hooks")
     if args.native_gdb and args.hook_plugin:
         parser.error("--native-gdb and --hook-plugin are mutually exclusive")
     if args.hook_scope != "parse" and args.hook_plugin is None:
         parser.error("--hook-scope all requires --hook-plugin")
     python = args.server_python.absolute()
-    os.environ["BDS_ONHIT_CONTACT_PROBE"] = "I_CONFIRM_ISOLATED_BDS"
     work = ROOT / "work-onhit"
     folder = work / "server"
     logfile = work / "bds.log"
@@ -207,9 +204,9 @@ def main() -> int:
         if not (work / "result.json").is_file():
             raise RuntimeError("Passive OnHit acceptance must pass first")
         passive = json.loads((work / "result.json").read_text())
-        if passive.get("status") != "PASS" or passive.get("hooks_enabled") is not False:
+        if passive.get("status") != "PASS" or passive.get("hooks_enabled") is not True:
             raise RuntimeError("Passive OnHit prerequisite did not pass")
-        if not (folder / "plugins" / "endstone_onhit_lifecycle.so").is_file():
+        if not (folder / "plugins" / "endstone_onhitfix.so").is_file():
             raise RuntimeError("Pinned passive native plugin is missing")
 
         # The first bot-enabled start installs its behavior pack and emits the
@@ -252,7 +249,7 @@ def main() -> int:
             if not hook_plugin.is_file() or not hook_plugin.stat().st_size:
                 raise FileNotFoundError(f"Isolated hook plugin unavailable: {hook_plugin}")
             shutil.copyfile(hook_plugin,
-                            folder / "plugins" / "endstone_onhit_lifecycle.so")
+                            folder / "plugins" / "endstone_onhitfix.so")
             os.environ["BDS_ONHIT_ISOLATED_TEST"] = "I_CONFIRM_ISOLATED_BDS"
             os.environ["BDS_ONHIT_HOOK_SCOPE"] = args.hook_scope
             result["hook_scope"] = args.hook_scope
@@ -292,18 +289,9 @@ def main() -> int:
                     f"/proc/{bds[0]}/maps").read_text():
                 raise RuntimeError("jemalloc 5.4.0 not mapped in BDS")
             result["heap_allocator_mapped"] = True
-        if args.hook_plugin is not None:
-            wait_for_log(current,
-                         "EXPERIMENTAL OnHit " +
-                         ("lifecycle" if args.hook_scope == "all" else "parse-only") +
-                         " hook active", timeout=15)
-            result["onhit_hooks_enabled"] = True
-            if args.fix_candidate:
-                wait_for_log(current, "ONHIT_FIX_CANDIDATE_ENABLED", timeout=15)
-                result["checks"].append("parse_reclaim_candidate_enabled")
-            result["checks"].append("native_funchook_parse_installed")
-        wait_for_log(current, "ONHIT_CONTACT_PROBE_READY", timeout=20)
-        result["checks"].append("native_passive_contact_oracle_registered")
+        wait_for_log(current, "OnHitFix Cleanup hook installed", timeout=15)
+        result["onhit_hooks_enabled"] = True
+        result["checks"].append("native_cleanup_funchook_installed")
         wait_for_log(current, "standalone SimulatedPlayer 功能可用", timeout=50)
         status_offset = current.command("bot status")
         status = "\n".join(wait_for_log(current, "protocol 3", timeout=12,
@@ -400,32 +388,43 @@ def main() -> int:
             )
         result["checks"].append("real_shulker_bullet_entity_observed")
 
-        # Bullet existence is not a hit. Require an independent Endstone
-        # ActorDamageEvent from the simulated player whose direct source is a
-        # shulker bullet, rather than inferring contact from entity presence.
-        contact_deadline = time.monotonic() + 65
-        contact_line = ""
-        while time.monotonic() < contact_deadline:
-            for line in current.snapshot():
-                if ("ONHIT_CONTACT receiver=" + BOT_NAME) in line and (
-                    "direct=minecraft:shulker_bullet" in line or
-                    "direct=shulker_bullet" in line
-                ):
-                    contact_line = line
-                    break
-            if contact_line:
+        # An Endstone projectile-damage event increments /ohf hit.
+        # This proves an observed damage callback, not native record attribution.
+        def hit_count() -> tuple[int, str]:
+            offset = current.command("ohf hit")
+            reply = "\\n".join(wait_for_log(current, "Top 20 Chunks",
+                                             timeout=10, start=offset))
+            # The console may split a multiline sendMessage into separate lines.
+            time.sleep(0.15)
+            reply = "\\n".join(current.snapshot(offset))
+            match = __import__("re").search(r"\\bOW\\s+0\\s+0\\s+(\\d+)\\b", reply)
+            return (int(match.group(1)) if match else 0), reply
+
+        def status_count() -> tuple[int, float, str]:
+            offset = current.command("ohf status")
+            reply = "\\n".join(wait_for_log(current, "Obj del:", timeout=10, start=offset))
+            time.sleep(0.15)
+            reply = "\\n".join(current.snapshot(offset))
+            count = __import__("re").search(r"Obj del:\\s*(\\d+)", reply)
+            mem = __import__("re").search(r"Obj mem:\\s*([\\d.]+) MiB", reply)
+            if not count or not mem:
+                raise AssertionError("Malformed /ohf status: " + reply[-700:])
+            return int(count.group(1)), float(mem.group(1)), reply
+
+        deadline = time.monotonic() + 65
+        first_hit, hit_output = 0, ""
+        while time.monotonic() < deadline:
+            first_hit, hit_output = hit_count()
+            if first_hit > 0:
                 break
             if current.process is None or current.process.poll() is not None:
-                raise RuntimeError("BDS exited before a confirmed projectile hit")
-            time.sleep(0.25)
-        result["contact_observed"] = bool(contact_line)
-        if not contact_line:
-            raise AssertionError(
-                "A real shulker_bullet existed, but no target damage from a "
-                "shulker_bullet was independently observed within 65 seconds"
-            )
-        result["contact_evidence"] = contact_line
-        result["checks"].append("simulated_player_shulker_projectile_damage_observed")
+                raise RuntimeError("BDS exited before observed projectile damage")
+            time.sleep(0.5)
+        if first_hit == 0:
+            raise AssertionError("Real shulker bullet seen but /ohf hit did not increment")
+        result["contact_observed"] = True
+        result["contact_evidence"] = hit_output[-900:]
+        result["checks"].append("projectile_damage_counted_in_overworld_chunk")
         result["memory_after_contact_kib"] = bds_memory_kib(current, folder)
         if args.heap_profile:
             result["heap_dump_acks"] = [heap_snapshot("warmup", work)]
@@ -503,111 +502,40 @@ def main() -> int:
             current.command(f"effect {BOT_NAME} regeneration 120 20 true")
             result["checks"].append("recreated_simulated_player_present_in_bds")
 
-            contact_offset = current.command(f"bot moveat {BOT_NAME} 8 221 8 overworld")
+            current.command(f"bot moveat {BOT_NAME} 8 221 8 overworld")
             for x, z in ((8, 11), (10, 12), (6, 12)):
                 current.command(f"summon shulker {x} 221 {z}")
             deadline = time.monotonic() + 75
             while time.monotonic() < deadline:
-                fresh = current.snapshot(contact_offset)
-                if any(("ONHIT_CONTACT receiver=" + BOT_NAME) in line and
-                       ("direct=minecraft:shulker_bullet" in line or
-                        "direct=shulker_bullet" in line) for line in fresh):
+                latest_hit, _ = hit_count()
+                if latest_hit > first_hit:
                     break
                 if current.process is None or current.process.poll() is not None:
                     raise RuntimeError("BDS exited during second Shulker encounter")
-                time.sleep(0.25)
+                time.sleep(0.5)
             else:
-                raise AssertionError("No verified projectile damage after target recreation")
+                raise AssertionError("No new /ohf projectile hit after target recreation")
+            result["second_hit_count"] = latest_hit
             result["checks"].append("second_real_projectile_contact_after_recreation")
             current.command("kill @e[type=shulker]")
             current.command("kill @e[type=shulker_bullet]")
         time.sleep(5)
         result["memory_after_combat_kib"] = bds_memory_kib(current, folder)
+        deleted, mem_mib, status_output = status_count()
+        if deleted <= 0:
+            raise AssertionError("Cleanup hook did not call a deleting destructor")
+        result["status_output"] = status_output[-600:]
+        result["obj_deleted"] = deleted
+        result["obj_mem_mib"] = mem_mib
+        result["checks"].append("real_cleanup_deleting_destructor_counted")
+        hits, top_output = hit_count()
+        if hits <= 0 or "Top 20 Chunks" not in top_output:
+            raise AssertionError("Missing /ohf hit Top 20 output")
+        result["hit_output"] = top_output[-1000:]
+        result["checks"].append("command_hit_top20_live")
         current.stop()
         current = None
         result["checks"].append("shulker_scenario_graceful_stop")
-        if args.hook_plugin is not None:
-            traces = sorted((folder / "plugins").rglob("trace.tsv"))
-            if len(traces) != 1:
-                raise AssertionError(f"Expected one onDisable hook trace: {traces}")
-            lines = [line for line in traces[0].read_text().splitlines()
-                     if line and not line.startswith("#")]
-            if not lines or not lines[0].startswith("sequence\tkind\t"):
-                raise AssertionError("Hook trace has no valid TSV header")
-            entries = [row.split("\t") for row in lines[1:]]
-            parse_enter = sum(row[1] == "1" for row in entries if len(row) >= 6)
-            parse_exit = sum(row[1] == "2" for row in entries if len(row) >= 6)
-            result["funchook_parse_enter"] = parse_enter
-            result["funchook_parse_exit"] = parse_exit
-            result["funchook_trace_rows"] = len(entries)
-            if args.hook_scope == "all":
-                extra = {}
-                for kind, enter_id, exit_id in (
-                    ("reset", "3", "4"), ("cleanup", "5", "6")
-                ):
-                    entered = sum(row[1] == enter_id for row in entries
-                                  if len(row) >= 6)
-                    exited = sum(row[1] == exit_id for row in entries
-                                 if len(row) >= 6)
-                    extra[kind] = {"enter": entered, "exit": exited}
-                    if entered < 1 or exited != entered:
-                        raise AssertionError(
-                            f"{kind} detour was not fully observed: {entered}/{exited}"
-                        )
-                result["funchook_lifecycle"] = extra
-                result["checks"].append("reset_cleanup_detours_enter_exit_traced")
-            # Bounded, post-shutdown address comparison only: an address repeat
-            # can also be allocator reuse, not proof of simultaneous alias owners.
-            if args.fix_candidate and args.hook_scope == "all":
-                seen = {}
-                repeats = []
-                snapshot_rows = 0
-                incomplete = 0
-                for row in entries:
-                    if len(row) < 16 or row[1] != "5":
-                        continue
-                    if row[14] != "1":
-                        incomplete += 1
-                        continue
-                    snapshot_rows += 1
-                    record = row[5]
-                    count = int(row[13])
-                    pointers = [p for p in row[15].split(",") if p and p != "0"]
-                    if len(pointers) < count:
-                        incomplete += 1
-                    for ptr in pointers:
-                        previous = seen.setdefault(ptr, record)
-                        if previous != record:
-                            repeats.append({"pointer": ptr, "first_record": previous,
-                                            "later_record": record})
-                result["cleanup_pointer_probe"] = {
-                    "valid_snapshots": snapshot_rows,
-                    "incomplete_snapshots": incomplete,
-                    "cross_record_address_repeats": len(repeats),
-                    "repeat_examples": repeats[:6],
-                    "interpretation": "address repeats do not prove overlapping lifetimes"
-                }
-                if snapshot_rows == 0:
-                    raise AssertionError("No cleanup child-pointer snapshots captured")
-                result["checks"].append("cleanup_child_pointer_snapshots_captured")
-            headers = traces[0].read_text().splitlines()[:3]
-            result["funchook_trace_header"] = headers
-            marker = next((x for x in headers if x.startswith("#fix_candidate=")), "")
-            if not marker:
-                raise AssertionError("Fix candidate status not recorded in trace")
-            result["fix_reclaimed"] = int(marker.split("reclaimed=", 1)[1])
-            if args.recreate_target and result["fix_reclaimed"] == 0:
-                raise AssertionError("Cleanup candidate never invoked deleting destructor")
-            if args.fix_candidate != ("#fix_candidate=1" in marker):
-                raise AssertionError(f"Fix candidate mode mismatch: {marker}")
-            if args.stress_rounds and parse_enter < args.stress_rounds:
-                raise AssertionError(f"Insufficient native Parse entries during sustained projectile load: {parse_enter}")
-            if parse_enter < 1 or parse_exit < 1 or parse_enter != parse_exit:
-                raise AssertionError(
-                    f"Native parse trampoline mismatch: enter={parse_enter} "
-                    f"exit={parse_exit}; rows={len(entries)}"
-                )
-            result["checks"].append("native_parse_detour_enter_exit_traced")
         if args.native_gdb:
             assert gdb_process is not None and gdb_log is not None
             gdb_process.wait(timeout=12)

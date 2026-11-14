@@ -1,15 +1,16 @@
-name: Isolated OnHit BDS acceptance
+name: Isolated OnHitFix BDS acceptance
 
 on:
   push:
     branches: [experiment/onhit-shulker]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   onhit:
-    name: OnHit live-target recreation with cleanup reclaim
+    name: Exact BDS native Cleanup and commands
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -19,83 +20,44 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ReallocAll/bds-onhit-lifecycle
-          ref: c990e0a622924b14e2969c82f1f299f09d26d57d
+          ref: 6fc2f0f7df9260ae1f4236bf83efedf152191bb8
           path: dependencies/onhit
           persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-      - name: Install Endstone 0.11.15 in isolated server environment
+      - name: Install Endstone 0.11.15
         run: |
           python -m venv .venv-server
           .venv-server/bin/python -m pip install 'endstone==0.11.15'
-      - name: Install official native build toolchain
+      - name: Install official toolchain
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            clang-18 lld-18 libc++-18-dev libc++abi-18-dev \
-            ninja-build libssl-dev
-      - name: Build pinned OnHit diagnostic plugin (detours disabled)
+          sudo apt-get install -y --no-install-recommends clang-18 lld-18 libc++-18-dev libc++abi-18-dev ninja-build libssl-dev
+      - name: Build OnHitFix once
         env:
           CC: clang-18
           CXX: clang++-18
         run: |
-          cmake -S dependencies/onhit -B build-onhit -G Ninja \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_CXX_FLAGS=-stdlib=libc++ \
-            -DONHIT_BUILD_PLUGIN=ON \
-            -DONHIT_BUILD_TESTS=OFF \
-            -DONHIT_ENABLE_EXPERIMENTAL_HOOKS=OFF
+          cmake -S dependencies/onhit -B build-onhit -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS=-stdlib=libc++ -DONHIT_BUILD_PLUGIN=ON -DONHIT_BUILD_TESTS=OFF
           cmake --build build-onhit --parallel 2
-      - name: Run exact BDS bootstrap and native plugin acceptance
+      - name: Verify exact BDS boot and automatic Cleanup hook
         run: |
-          python onhit_probe.py \
-            --server-python .venv-server/bin/python \
-            --plugin build-onhit/endstone_onhit_lifecycle.so \
-            --onhit-commit c990e0a622924b14e2969c82f1f299f09d26d57d
-      - name: Export exact ELF ABI evidence without enabling hooks
+          python onhit_probe.py --server-python .venv-server/bin/python --plugin build-onhit/endstone_onhitfix.so --onhit-commit 6fc2f0f7df9260ae1f4236bf83efedf152191bb8
+      - name: Inspect factory allocation instruction (size evidence only)
         run: |
-          set -euo pipefail
-          mapfile -t binaries < <(find work-onhit/server -type f -name bedrock_server)
-          test "${#binaries[@]}" -eq 1
-          python dependencies/onhit/tools/export_abi_evidence.py "${binaries[0]}" > work-onhit/abi-evidence.txt
-          cat work-onhit/abi-evidence.txt
-      - name: Inspect original Cleanup and shallow-copy vicinity (read-only)
+          objdump -d -M intel --start-address=0x71439b0 --stop-address=0x71439f0 work-onhit/server/bedrock_server
+      - name: Install pinned endstone-bot
         run: |
-          set -euo pipefail
-          mapfile -t binaries < <(find work-onhit/server -type f -name bedrock_server)
-          test "${#binaries[@]}" -eq 1
-          echo "=== Original Cleanup 0x7757840..0x7757940 ==="
-          objdump -d -M intel --show-raw-insn --start-address=0x7757840 --stop-address=0x7757940 "${binaries[0]}"
-          echo "=== Shallow-copy path 0x7757f60..0x7757fd0 ==="
-          objdump -d -M intel --show-raw-insn --start-address=0x7757f60 --stop-address=0x7757fd0 "${binaries[0]}"
-      - name: Build isolated parse-only funchook variant with pinned upstream source
-        env:
-          CC: clang-18
-          CXX: clang++-18
-        run: |
-          cmake -S dependencies/onhit -B build-onhit-hooks -G Ninja \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_CXX_FLAGS=-stdlib=libc++ \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DONHIT_BUILD_PLUGIN=ON \
-            -DONHIT_BUILD_TESTS=OFF \
-            -DONHIT_ENABLE_EXPERIMENTAL_HOOKS=ON
-          cmake --build build-onhit-hooks --parallel 2
-          test -s build-onhit-hooks/endstone_onhit_lifecycle.so
-      - name: Install pinned endstone-bot in the isolated BDS environment
-        run: |
-          .venv-server/bin/python -m pip install \
-            'git+https://github.com/ReallocAll/endstone-bot.git@4bd0691f1ef0f551e5ba258d4747b35a3b748177'
+          .venv-server/bin/python -m pip install 'git+https://github.com/ReallocAll/endstone-bot.git@4bd0691f1ef0f551e5ba258d4747b35a3b748177'
           .venv-server/bin/python -m pip check
-      - name: Exercise offline Beta APIs, standalone bot and Shulker projectile
+      - name: Real Shulker contact, commands, recreation and cleanup
         run: |
           python -m py_compile server.py onhit_probe.py onhit_shulker_probe.py
-          python onhit_shulker_probe.py --server-python .venv-server/bin/python --hook-plugin build-onhit-hooks/endstone_onhit_lifecycle.so --hook-scope all --stress-rounds 6 --fix-candidate --recreate-target
-      - name: Display acceptance evidence on failure or success
+          python onhit_shulker_probe.py --server-python .venv-server/bin/python --stress-rounds 6 --recreate-target
+      - name: Display acceptance evidence
         if: always()
         run: |
           if test -f work-onhit/result.json; then cat work-onhit/result.json; fi
           if test -f work-onhit/shulker_result.json; then cat work-onhit/shulker_result.json; fi
-          find work-onhit/server/plugins -name trace.tsv -type f -exec sh -c 'head -n 5 "$1"; wc -l "$1"' sh '{}' \; || true
-          if test -f work-onhit/bds.log; then tail -n 70 work-onhit/bds.log; fi
+          if test -f work-onhit/bds.log; then tail -n 90 work-onhit/bds.log; fi

@@ -1,4 +1,4 @@
-"""Isolated BDS 1.26.60.6 passive native OnHit plugin acceptance.
+"""Isolated BDS 1.26.60.6 OnHitFix native Cleanup hook acceptance.
 
 Reuse the existing Server lifecycle. Do not touch the regular testbed world or
 the user's production server. No experimental hooks are installed here.
@@ -55,7 +55,7 @@ def main() -> int:
         "status": "FAIL",
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "endstone": "0.11.15", "bds": "1.26.60.6",
-        "onhit_commit": args.onhit_commit, "hooks_enabled": False,
+        "onhit_commit": args.onhit_commit, "hooks_enabled": True,
         "checks": [],
     }
     running: Server | None = None
@@ -83,7 +83,7 @@ def main() -> int:
         result["checks"].append("exact_executable_sha256_and_build_id")
 
         configure(folder / "server.properties", "raknet")
-        target = folder / "plugins" / "endstone_onhit_lifecycle.so"
+        target = folder / "plugins" / "endstone_onhitfix.so"
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(plugin, target)
         running = new_server()
@@ -91,17 +91,13 @@ def main() -> int:
         running.wait_ready()
         lines = "\n".join(running.snapshot())
         for text in (
-            "Loading onhit_lifecycle v0.1.0",
-            "Enabling onhit_lifecycle v0.1.0",
-            "Exact BDS image verified",
-            "Diagnostics passive only",
+            "Loading onhitfix v0.1.0",
+            "Enabling onhitfix v0.1.0",
+            "OnHitFix Cleanup hook installed",
         ):
             if text not in lines:
                 raise AssertionError(f"Plugin acceptance log missing: {text}")
-        if "EXPERIMENTAL OnHit hooks active" in lines:
-            raise AssertionError("Active hook unexpectedly installed")
-        result["checks"].append("native_plugin_loaded_with_identity_gate")
-        result["checks"].append("no_experimental_detours")
+        result["checks"].append("native_cleanup_hook_loaded_with_identity_gate")
         running.stop()
         running = None
         result["checks"].append("plugin_graceful_stop_no_processes")
