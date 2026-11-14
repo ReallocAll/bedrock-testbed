@@ -88,7 +88,7 @@ jobs:
           python -m py_compile server.py onhit_probe.py onhit_shulker_probe.py
           extra=()
           if [[ '${{ matrix.fix_candidate }}' == 'on' ]]; then extra+=(--fix-candidate); fi
-          python onhit_shulker_probe.py --server-python .venv-server/bin/python --hook-plugin build-onhit-hooks/endstone_onhit_lifecycle.so --hook-scope all "${extra[@]}"
+          python onhit_shulker_probe.py --server-python .venv-server/bin/python --hook-plugin build-onhit-hooks/endstone_onhit_lifecycle.so --hook-scope all --stress-rounds 90 "${extra[@]}"
       - name: Display acceptance evidence on failure or success
         if: always()
         run: |

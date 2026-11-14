@@ -140,6 +140,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--server-python", type=Path, required=True)
     parser.add_argument("--native-gdb", action="store_true")
+    parser.add_argument("--stress-rounds", type=int, default=0,
+                        help="Repeat fixed-size Shulker spawn/cleanup workload")
     parser.add_argument("--fix-candidate", action="store_true",
                         help="Enable isolated parse-reclaim candidate for A/B job")
     parser.add_argument("--hook-plugin", type=Path)
@@ -367,6 +369,27 @@ def main() -> int:
             )
         result["contact_evidence"] = contact_line
         result["checks"].append("simulated_player_shulker_projectile_damage_observed")
+        result["memory_after_contact_kib"] = bds_memory_kib(current, folder)
+        if args.stress_rounds:
+            if not 1 <= args.stress_rounds <= 300:
+                raise ValueError("stress-rounds must be between 1 and 300")
+            snapshots = []
+            for round_no in range(1, args.stress_rounds + 1):
+                for x, z in ((8, 11), (10, 12), (6, 12)):
+                    current.command(f"summon shulker {x} 221 {z}")
+                time.sleep(0.3)
+                current.command("kill @e[type=shulker]")
+                current.command("kill @e[type=shulker_bullet]")
+                if round_no % 10 == 0:
+                    time.sleep(0.4)
+                    if current.process is None or current.process.poll() is not None:
+                        raise RuntimeError(f"BDS died during stress round {round_no}")
+                    snapshots.append({"round": round_no,
+                                      "memory_kib": bds_memory_kib(current, folder)})
+            result["stress_rounds"] = args.stress_rounds
+            result["stress_summons_sent"] = args.stress_rounds * 3
+            result["stress_memory_snapshots"] = snapshots
+            result["checks"].append("fixed_count_shulker_spawn_cleanup_stress")
         time.sleep(5)
         result["memory_after_combat_kib"] = bds_memory_kib(current, folder)
         current.stop()
