@@ -34,7 +34,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             clang-18 lld-18 libc++-18-dev libc++abi-18-dev \
-            ninja-build libssl-dev
+            ninja-build libssl-dev gdb
       - name: Build pinned OnHit diagnostic plugin (detours disabled)
         env:
           CC: clang-18
@@ -68,10 +68,11 @@ jobs:
       - name: Exercise offline Beta APIs, standalone bot and Shulker projectile
         run: |
           python -m py_compile server.py onhit_probe.py onhit_shulker_probe.py
-          python onhit_shulker_probe.py --server-python .venv-server/bin/python
+          python onhit_shulker_probe.py --server-python .venv-server/bin/python --native-gdb
       - name: Display acceptance evidence on failure or success
         if: always()
         run: |
           if test -f work-onhit/result.json; then cat work-onhit/result.json; fi
           if test -f work-onhit/shulker_result.json; then cat work-onhit/shulker_result.json; fi
+          if test -f work-onhit/native-entry-gdb.log; then tail -n 35 work-onhit/native-entry-gdb.log; fi
           if test -f work-onhit/bds.log; then tail -n 70 work-onhit/bds.log; fi
