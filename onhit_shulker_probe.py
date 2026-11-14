@@ -397,7 +397,7 @@ def main() -> int:
             # The console may split a multiline sendMessage into separate lines.
             time.sleep(0.15)
             reply = "\n".join(current.snapshot(offset))
-            match = __import__("re").search(r"\bOW\s+0\s+0\s+(\d+)\b", reply)
+            match = __import__("re").search(r"\bOW X:0 Z:0 Hits:(\d+)\b", reply)
             return (int(match.group(1)) if match else 0), reply
 
         def status_count() -> tuple[int, int | float, bool, str]:
@@ -549,6 +549,10 @@ def main() -> int:
             raise AssertionError("Missing /ohf hit Top 20 output")
         result["hit_output"] = top_output[-1000:]
         result["checks"].append("command_hit_top20_live")
+        # An explicit page must be accepted by Endstone's command parser.
+        offset = current.command("ohf hit 1")
+        wait_for_log(current, "Top 20 Chunks (1/", timeout=10, start=offset)
+        result["checks"].append("command_hit_explicit_page_live")
         current.stop()
         current = None
         result["checks"].append("shulker_scenario_graceful_stop")
