@@ -392,8 +392,19 @@ def main() -> int:
         # This proves an observed damage callback, not native record attribution.
         def hit_count() -> tuple[int, str]:
             offset = current.command("ohf hit")
-            reply = "\n".join(wait_for_log(current, "X:0 Z:0 Hits:",
-                                             timeout=10, start=offset))
+            # Before the first hit the new command has no data row; accept
+            # either the empty response or a ranked row without blocking.
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                reply = "\n".join(current.snapshot(offset))
+                if ("Top 10 Chunks: no projectile damage recorded" in reply
+                        or ("#1 " in reply and " Hits:" in reply)):
+                    break
+                if current.process is None or current.process.poll() is not None:
+                    raise RuntimeError("BDS stopped during /ohf hit response")
+                time.sleep(0.25)
+            else:
+                raise TimeoutError("Missing /ohf hit response")
             # The console may split a multiline sendMessage into separate lines.
             time.sleep(0.15)
             reply = "\n".join(current.snapshot(offset))
