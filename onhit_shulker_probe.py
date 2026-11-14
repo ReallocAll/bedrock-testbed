@@ -392,13 +392,15 @@ def main() -> int:
         # This proves an observed damage callback, not native record attribution.
         def hit_count() -> tuple[int, str]:
             offset = current.command("ohf hit")
-            reply = "\n".join(wait_for_log(current, "Top 20 Chunks",
+            reply = "\n".join(wait_for_log(current, "X:0 Z:0 Hits:",
                                              timeout=10, start=offset))
             # The console may split a multiline sendMessage into separate lines.
             time.sleep(0.15)
             reply = "\n".join(current.snapshot(offset))
-            match = __import__("re").search(r"\bOW X:0 Z:0 Hits:(\d+)\b", reply)
-            return (int(match.group(1)) if match else 0), reply
+            match = __import__("re").search(r"#1 (.+?) X:0 Z:0 Hits:(\d+)\b", reply)
+            if match and match.group(1) in {"OW", "NE", "END"}:
+                raise AssertionError("Abbreviated dimension name in /ohf hit")
+            return (int(match.group(2)) if match else 0), reply
 
         def status_count() -> tuple[int, int | float, bool, str]:
             offset = current.command("ohf status")
@@ -545,14 +547,12 @@ def main() -> int:
         result["obj_mem_is_lower_bound"] = is_lower_bound
         result["checks"].append("real_cleanup_deleting_destructor_counted")
         hits, top_output = hit_count()
-        if hits <= 0 or "Top 20 Chunks" not in top_output:
-            raise AssertionError("Missing /ohf hit Top 20 output")
+        if hits <= 0 or "#1 " not in top_output:
+            raise AssertionError("Missing /ohf hit Top 10 output")
+        if "Next: /ohf hit" in top_output or "Top 20 Chunks" in top_output:
+            raise AssertionError("Unexpected pagination in /ohf hit output")
         result["hit_output"] = top_output[-1000:]
-        result["checks"].append("command_hit_top20_live")
-        # An explicit page must be accepted by Endstone's command parser.
-        offset = current.command("ohf hit 1")
-        wait_for_log(current, "Top 20 Chunks (1/", timeout=10, start=offset)
-        result["checks"].append("command_hit_explicit_page_live")
+        result["checks"].append("command_hit_top10_full_dimension_live")
         current.stop()
         current = None
         result["checks"].append("shulker_scenario_graceful_stop")
