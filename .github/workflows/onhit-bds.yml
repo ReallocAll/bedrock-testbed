@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ReallocAll/bds-onhit-lifecycle
-          ref: 1e30d0c006d66befdf6caa00eaf09fa432ff073c
+          ref: bb79b92f5c9122cc61a5295810c305508af70bc7
           path: dependencies/onhit
           persist-credentials: false
       - uses: actions/setup-python@v6

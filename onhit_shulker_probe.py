@@ -400,15 +400,27 @@ def main() -> int:
             match = __import__("re").search(r"\bOW\s+0\s+0\s+(\d+)\b", reply)
             return (int(match.group(1)) if match else 0), reply
 
-        def status_count() -> tuple[int, str]:
+        def status_count() -> tuple[int, int | float, str]:
             offset = current.command("ohf status")
-            reply = "\n".join(wait_for_log(current, "Obj del:", timeout=10, start=offset))
-            time.sleep(0.15)
+            wait_for_log(current, "Obj del:", timeout=10, start=offset)
+            wait_for_log(current, "Obj mem:", timeout=10, start=offset)
             reply = "\n".join(current.snapshot(offset))
-            count = __import__("re").search(r"Obj del:\s*(\d+)", reply)
-            if not count or "Obj mem:" in reply:
+            import re
+
+            count = re.search(r"Obj del:\s*(\d+)\s*$", reply, re.MULTILINE)
+            memory = re.findall(
+                r"Obj mem:\s*>=\s*(\d+(?:\.\d+)?)\s*(B|KiB|MiB)\s+"
+                r"\(lower bound\)\s*$",
+                reply,
+                re.MULTILINE,
+            )
+            if not count or len(memory) != 1:
                 raise AssertionError("Malformed /ohf status: " + reply[-700:])
-            return int(count.group(1)), reply
+            value, unit = memory[0]
+            memory_bytes = float(value) * {"B": 1, "KiB": 1024, "MiB": 1024**2}[unit]
+            if memory_bytes.is_integer():
+                memory_bytes = int(memory_bytes)
+            return int(count.group(1)), memory_bytes, reply
 
         deadline = time.monotonic() + 65
         first_hit, hit_output = 0, ""
@@ -520,11 +532,14 @@ def main() -> int:
             current.command("kill @e[type=shulker_bullet]")
         time.sleep(5)
         result["memory_after_combat_kib"] = bds_memory_kib(current, folder)
-        deleted, status_output = status_count()
+        deleted, memory_lower_bound_bytes, status_output = status_count()
         if deleted <= 0:
             raise AssertionError("Cleanup hook did not call a deleting destructor")
+        if memory_lower_bound_bytes <= 0:
+            raise AssertionError("Cleanup hook reported no positive Obj mem lower bound")
         result["status_output"] = status_output[-600:]
         result["obj_deleted"] = deleted
+        result["obj_mem_lower_bound_bytes"] = memory_lower_bound_bytes
         result["checks"].append("real_cleanup_deleting_destructor_counted")
         hits, top_output = hit_count()
         if hits <= 0 or "Top 20 Chunks" not in top_output:
