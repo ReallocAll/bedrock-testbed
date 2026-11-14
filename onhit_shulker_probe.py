@@ -116,9 +116,12 @@ def main() -> int:
     parser.add_argument("--server-python", type=Path, required=True)
     parser.add_argument("--native-gdb", action="store_true")
     parser.add_argument("--hook-plugin", type=Path)
+    parser.add_argument("--hook-scope", choices=("parse", "all"), default="parse")
     args = parser.parse_args()
     if args.native_gdb and args.hook_plugin:
         parser.error("--native-gdb and --hook-plugin are mutually exclusive")
+    if args.hook_scope != "parse" and args.hook_plugin is None:
+        parser.error("--hook-scope all requires --hook-plugin")
     python = args.server_python.absolute()
     os.environ["BDS_ONHIT_CONTACT_PROBE"] = "I_CONFIRM_ISOLATED_BDS"
     work = ROOT / "work-onhit"
@@ -193,11 +196,16 @@ def main() -> int:
             shutil.copyfile(hook_plugin,
                             folder / "plugins" / "endstone_onhit_lifecycle.so")
             os.environ["BDS_ONHIT_ISOLATED_TEST"] = "I_CONFIRM_ISOLATED_BDS"
+            os.environ["BDS_ONHIT_HOOK_SCOPE"] = args.hook_scope
+            result["hook_scope"] = args.hook_scope
             result["checks"].append("isolated_parse_only_funchook_binary_selected")
 
         current = start()
         if args.hook_plugin is not None:
-            wait_for_log(current, "EXPERIMENTAL OnHit parse-only hook active", timeout=15)
+            wait_for_log(current,
+                         "EXPERIMENTAL OnHit " +
+                         ("lifecycle" if args.hook_scope == "all" else "parse-only") +
+                         " hook active", timeout=15)
             result["onhit_hooks_enabled"] = True
             result["checks"].append("native_funchook_parse_installed")
         wait_for_log(current, "ONHIT_CONTACT_PROBE_READY", timeout=20)
@@ -340,6 +348,22 @@ def main() -> int:
             result["funchook_parse_enter"] = parse_enter
             result["funchook_parse_exit"] = parse_exit
             result["funchook_trace_rows"] = len(entries)
+            if args.hook_scope == "all":
+                extra = {}
+                for kind, enter_id, exit_id in (
+                    ("reset", "3", "4"), ("cleanup", "5", "6")
+                ):
+                    entered = sum(row[1] == enter_id for row in entries
+                                  if len(row) >= 6)
+                    exited = sum(row[1] == exit_id for row in entries
+                                 if len(row) >= 6)
+                    extra[kind] = {"enter": entered, "exit": exited}
+                    if entered < 1 or exited != entered:
+                        raise AssertionError(
+                            f"{kind} detour was not fully observed: {entered}/{exited}"
+                        )
+                result["funchook_lifecycle"] = extra
+                result["checks"].append("reset_cleanup_detours_enter_exit_traced")
             result["funchook_trace_header"] = traces[0].read_text().splitlines()[:2]
             if parse_enter < 1 or parse_exit < 1 or parse_enter != parse_exit:
                 raise AssertionError(
