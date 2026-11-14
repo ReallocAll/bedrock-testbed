@@ -392,21 +392,21 @@ def main() -> int:
         # This proves an observed damage callback, not native record attribution.
         def hit_count() -> tuple[int, str]:
             offset = current.command("ohf hit")
-            reply = "\\n".join(wait_for_log(current, "Top 20 Chunks",
+            reply = "\n".join(wait_for_log(current, "Top 20 Chunks",
                                              timeout=10, start=offset))
             # The console may split a multiline sendMessage into separate lines.
             time.sleep(0.15)
-            reply = "\\n".join(current.snapshot(offset))
-            match = __import__("re").search(r"\\bOW\\s+0\\s+0\\s+(\\d+)\\b", reply)
+            reply = "\n".join(current.snapshot(offset))
+            match = __import__("re").search(r"\bOW\s+0\s+0\s+(\d+)\b", reply)
             return (int(match.group(1)) if match else 0), reply
 
         def status_count() -> tuple[int, float, str]:
             offset = current.command("ohf status")
-            reply = "\\n".join(wait_for_log(current, "Obj del:", timeout=10, start=offset))
+            reply = "\n".join(wait_for_log(current, "Obj del:", timeout=10, start=offset))
             time.sleep(0.15)
-            reply = "\\n".join(current.snapshot(offset))
-            count = __import__("re").search(r"Obj del:\\s*(\\d+)", reply)
-            mem = __import__("re").search(r"Obj mem:\\s*([\\d.]+) MiB", reply)
+            reply = "\n".join(current.snapshot(offset))
+            count = __import__("re").search(r"Obj del:\s*(\d+)", reply)
+            mem = __import__("re").search(r"Obj mem:\s*([\d.]+) MiB", reply)
             if not count or not mem:
                 raise AssertionError("Malformed /ohf status: " + reply[-700:])
             return int(count.group(1)), float(mem.group(1)), reply
