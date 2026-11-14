@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,9 +35,81 @@ def wait_for_log(server: Server, expected: str, *, timeout: float,
     raise TimeoutError(f"BDS did not log {expected!r}; last={server.snapshot(start)[-10:]}")
 
 
+def start_native_entry_probe(server: Server, folder: Path, work: Path):
+    """Single bounded external breakpoint, independent of C++ function ABI.
+
+    GDB detaches itself at the first parse entry. This never changes any BDS
+    file and never installs or calls a detour/trampoline.
+    """
+    if server.process is None:
+        raise RuntimeError("BDS bootstrap process is missing")
+    parent = server.process.pid
+    children_file = Path(f"/proc/{parent}/task/{parent}/children")
+    children = [int(x) for x in children_file.read_text().split()]
+    expected = (folder / "bedrock_server").resolve()
+    bds = [pid for pid in children
+           if Path(f"/proc/{pid}/exe").resolve() == expected]
+    if len(bds) != 1:
+        raise RuntimeError(f"Expected a single BDS child of {parent}: {children}")
+    pid = bds[0]
+    loads = set()
+    for line in Path(f"/proc/{pid}/maps").read_text().splitlines():
+        fields = line.split()
+        if len(fields) >= 6 and fields[-1] == str(expected):
+            begin = int(fields[0].split("-", 1)[0], 16)
+            offset = int(fields[2], 16)
+            loads.add(begin - offset)
+    if len(loads) != 1:
+        raise RuntimeError(f"Could not determine unique BDS ELF load bias: {loads}")
+    entry = loads.pop() + 0x7143660
+
+    commands = work / "native-entry.gdb"
+    commands.write_text(
+        "set pagination off\n"
+        "set confirm off\n"
+        "set print thread-events off\n"
+        f"break *0x{entry:x}\n"
+        "commands 1\n"
+        "  silent\n"
+        '  printf "ONHIT_GDB_PARSE rdi=0x%lx rsi=0x%lx retpc=0x%lx\\n", '
+        '$rdi, $rsi, *(unsigned long*)$rsp\n'
+        "  detach\n"
+        "  quit\n"
+        "end\n"
+        "continue\n"
+    )
+    proc = subprocess.Popen(
+        ["sudo", "-n", "gdb", "-q", "-nx", "--batch",
+         "-p", str(pid), "-x", str(commands)],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, bufsize=1,
+    )
+    ready = threading.Event()
+    trace_log = work / "native-entry-gdb.log"
+
+    def capture() -> None:
+        with trace_log.open("w") as output:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                output.write(line)
+                output.flush()
+                if "Breakpoint 1 at" in line:
+                    ready.set()
+
+    threading.Thread(target=capture, daemon=True).start()
+    if not ready.wait(timeout=20):
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=5)
+        raise RuntimeError("GDB breakpoint was not ready: " +
+                           trace_log.read_text()[-1200:])
+    return proc, trace_log
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--server-python", type=Path, required=True)
+    parser.add_argument("--native-gdb", action="store_true")
     args = parser.parse_args()
     python = args.server_python.absolute()
     os.environ["BDS_ONHIT_CONTACT_PROBE"] = "I_CONFIRM_ISOLATED_BDS"
@@ -51,6 +124,8 @@ def main() -> int:
         "onhit_hooks_enabled": False, "checks": [],
     }
     current: Server | None = None
+    gdb_process: subprocess.Popen | None = None
+    gdb_log: Path | None = None
 
     def start() -> Server:
         server = Server(python, folder, logfile,
@@ -160,6 +235,10 @@ def main() -> int:
         time.sleep(2)
         result["checks"].append("simulated_player_relocated_to_arena")
 
+        if args.native_gdb:
+            gdb_process, gdb_log = start_native_entry_probe(current, folder, work)
+            result["checks"].append("external_native_entry_breakpoint_installed")
+
         for x, z in ((8, 11), (10, 12), (6, 12)):
             offset = current.command(f"summon shulker {x} 221 {z}")
             time.sleep(0.5)
@@ -224,6 +303,17 @@ def main() -> int:
         current.stop()
         current = None
         result["checks"].append("shulker_scenario_graceful_stop")
+        if args.native_gdb:
+            assert gdb_process is not None and gdb_log is not None
+            gdb_process.wait(timeout=12)
+            evidence = [line.strip() for line in gdb_log.read_text().splitlines()
+                        if "ONHIT_GDB_PARSE" in line]
+            result["native_parse_entries"] = evidence
+            result["gdb_exit_code"] = gdb_process.returncode
+            if not evidence or gdb_process.returncode != 0:
+                raise AssertionError("No verified native parse entry or debugger failure; "
+                                     "see work-onhit/native-entry-gdb.log")
+            result["checks"].append("exact_native_parse_entry_breakpoint_hit")
         result["status"] = "PASS"
     except BaseException as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
@@ -234,6 +324,13 @@ def main() -> int:
             except BaseException as exc:
                 result["cleanup_error"] = f"{type(exc).__name__}: {exc}"
                 result["status"] = "FAIL"
+        if gdb_process is not None and gdb_process.poll() is None:
+            gdb_process.terminate()
+            try:
+                gdb_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                gdb_process.kill()
+                gdb_process.wait()
         (work / "shulker_result.json").write_text(
             json.dumps(result, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
