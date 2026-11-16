@@ -176,8 +176,10 @@ class Server:
             )
 
 
-def configure(path, transport):
+def configure(path, transport, *, max_players=None):
     properties = {**PROPERTIES, "transport": transport}
+    if max_players is not None:
+        properties["max-players"] = str(max_players)
     if not path.is_file():
         raise FileNotFoundError(f"Endstone did not create {path}")
     updated = set()
