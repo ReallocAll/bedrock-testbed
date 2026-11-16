@@ -10,13 +10,24 @@ on:
         required: false
         type: string
         default: '96045ce85d9ba373db64daab09cc7176e1e29a15'
+      capacity_bots:
+        description: 'Capacity run bot count, 0 disables capacity mode'
+        required: false
+        default: '0'
+        type: string
+      capacity_transport:
+        description: 'Capacity run transport'
+        required: false
+        default: 'raknet'
+        type: choice
+        options: [raknet, nethernet]
 
 permissions:
   contents: read
 
 concurrency:
-  group: real-bds-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ (inputs.capacity_bots != '' && inputs.capacity_bots != '0') && 'endpilot-capacity-exclusive' || format('real-bds-{0}', github.ref) }}
+  cancel-in-progress: ${{ inputs.capacity_bots == '' || inputs.capacity_bots == '0' }}
 
 jobs:
   endpilot:
@@ -26,9 +37,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        transport: [raknet, nethernet]
-        suite: ${{ fromJSON((github.ref_name == 'main' || github.ref_name == 'test/navigation-frontier-20261101') && '["smoke","navigation"]' || '["branch"]') }}
-    timeout-minutes: 30
+        transport: ${{ fromJSON((inputs.capacity_bots != '' && inputs.capacity_bots != '0') && format('["{0}"]', inputs.capacity_transport) || '["raknet","nethernet"]') }}
+        suite: ${{ fromJSON((inputs.capacity_bots != '' && inputs.capacity_bots != '0') && '["capacity"]' || ((github.ref_name == 'main' || github.ref_name == 'test/navigation-frontier-20261101') && '["smoke","navigation"]' || '["branch"]')) }}
+    timeout-minutes: ${{ matrix.suite == 'capacity' && 25 || 30 }}
     env:
       ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '96045ce85d9ba373db64daab09cc7176e1e29a15' }}
     steps:
@@ -77,7 +88,9 @@ jobs:
       - name: Exercise public Typed Packet API against fresh real BDS
         shell: bash
         run: |
-          if [[ "${{ matrix.suite }}" == "navigation" ]]; then
+          if [[ "${{ matrix.suite }}" == "capacity" ]]; then
+            .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}" --capacity-bots "${{ inputs.capacity_bots }}"
+          elif [[ "${{ matrix.suite }}" == "navigation" ]]; then
             .venv-client/bin/python navigation_probe.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
           elif [[ "${{ matrix.suite }}" == "smoke" ]]; then
             .venv-client/bin/python testbed.py --server-python .venv-server/bin/python --endpilot-commit "$ENDPILOT_COMMIT" --transport "${{ matrix.transport }}"
@@ -105,6 +118,8 @@ jobs:
             work/motion_trajectory.json
             work/controller_trajectory.json
             work/navigation_trajectory.json
+            work/capacity.json
+            work/capacity_samples.csv
             work/bds.log
             work/server/version.txt
             work/server/server.properties
