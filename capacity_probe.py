@@ -179,7 +179,10 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 ))
                 for index, name in enumerate(names)
             ]
-            await asyncio.gather(*(bot.wait_ready(240) for bot in bots))
+            # The final RakNet join starts after (count - 1) * stagger_ms.
+            # A fixed 240 s readiness deadline expires before 50+ Bots can start.
+            ready_timeout_s = max(240, (count - 1) * stagger_ms / 1000 + 60)
+            await asyncio.gather(*(bot.wait_ready(ready_timeout_s) for bot in bots))
             report["ready_seconds"] = round(time.monotonic() - started, 3)
             report["players_joined"] = await asyncio.to_thread(check_players, server, names, count)
             phase = "warmup"
