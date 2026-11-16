@@ -23,6 +23,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True, help="Full SHA expected from the EndPilot VCS install")
     parser.add_argument("--transport", choices=("raknet", "nethernet"), default="raknet")
     parser.add_argument("--stability", action="store_true", help="Run 600s two-Bot soak and BDS SIGKILL recovery")
+    parser.add_argument("--capacity-bots", type=int, default=0, help="Run isolated multi-Bot capacity probe")
     args = parser.parse_args()
     # Preserve the venv executable path; resolve() follows its symlink to base Python.
     python = args.server_python.absolute()
@@ -66,7 +67,7 @@ def main():
         server.stop()
         server = None
 
-        configure(folder / "server.properties", args.transport)
+        configure(folder / "server.properties", args.transport, max_players=128 if args.capacity_bots else None)
         shutil.rmtree(folder / "worlds", ignore_errors=True)
         server = Server(python, folder, logfile)
         server.start()
@@ -80,9 +81,15 @@ def main():
             assert 200 <= status < 300, f"NetherNet HTTP capability rejected: {status}"
             results["signaling"] = {"endpoint": "http://127.0.0.1:19132/v1/join", "status": status}
             results["checks"].append("nethernet_http_signaling_server_confirmed")
-        from scenarios import exercise
-        from stability import exercise_stability
-        asyncio.run((exercise_stability if args.stability else exercise)(server, results, args.transport))
+        if args.capacity_bots:
+            if args.stability:
+                raise ValueError("--capacity-bots and --stability are mutually exclusive")
+            from capacity_probe import exercise_capacity
+            asyncio.run(exercise_capacity(server, results, args.transport, args.capacity_bots))
+        else:
+            from scenarios import exercise
+            from stability import exercise_stability
+            asyncio.run((exercise_stability if args.stability else exercise)(server, results, args.transport))
         server.stop()
         server = None
         results["checks"].append("bds_graceful_stop_no_processes")
