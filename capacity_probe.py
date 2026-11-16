@@ -165,6 +165,17 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             "tasks_end": ending["tasks"],
         }
         report["phases"][label] = data
+        # Readiness alone is not capacity acceptance: require usable 20 Hz timing.
+        if data["input_packets_per_second"] < 0.8 * expected / elapsed:
+            raise AssertionError(
+                f"{label} PlayerAuthInput under-rate: "
+                f"{data['input_packets_per_second']} vs expected {expected / elapsed:.1f}/s"
+            )
+        if data["tick_missing_fraction_approx"] > 0.1 or (data["lateness_us_p99"] or 0) > 100_000:
+            raise AssertionError(
+                f"{label} tick degradation: missing={data['tick_missing_fraction_approx']}, "
+                f"p99_us={data['lateness_us_p99']}"
+            )
         if not all(number > 0 for number in inputs.values()):
             raise AssertionError(f"some bots sent no PlayerAuthInput in {label}: {inputs}")
 
