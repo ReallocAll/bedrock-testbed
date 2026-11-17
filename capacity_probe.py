@@ -117,8 +117,11 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
 
     async def sampler():
         while True:
+            snapshot_started_ns = time.perf_counter_ns()
             snap = resource_snapshot(server)
+            snapshot_duration_ms = round((time.perf_counter_ns() - snapshot_started_ns) / 1_000_000, 3)
             samples.append({
+                "snapshot_duration_ms": snapshot_duration_ms,
                 "elapsed_s": round(time.monotonic() - started, 3), "phase": phase,
                 "client_cpu_ticks": snap["client"]["cpu_ticks"] if snap["client"] else None,
                 "client_rss_kib": snap["client"]["rss_kib"] if snap["client"] else None,
