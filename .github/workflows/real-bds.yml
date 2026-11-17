@@ -145,6 +145,8 @@ jobs:
             work/capacity_samples.csv
             work/capacity_thread_cpu.csv
             work/capacity_thread_cpu.log
+            work/capacity_thread_map.json
+            work/capacity_thread_stacks.log
             work/bds.log
             work/server/version.txt
             work/server/server.properties

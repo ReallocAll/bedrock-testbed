@@ -3,16 +3,55 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import faulthandler
 import json
 import os
+import signal
+import threading
 import re
 import subprocess
 import sys
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 
 from server import ROOT, PLAYER, PLAYER_COUNT, Server
+
+
+
+def install_mailbox_wakeup_ab():
+    """Diagnostics only: compare per-packet and per-peer coalesced event-loop wakeups."""
+    from raknet.asyncio import _AsyncMailbox
+
+    original_put = _AsyncMailbox.put
+    _AsyncMailbox._ab_enabled = False
+
+    def flush(self):
+        pending = self._ab_pending
+        while pending:
+            self._queue.put_nowait(pending.popleft())
+        self._ab_scheduled = False
+
+    def put(self, item):
+        if not _AsyncMailbox._ab_enabled:
+            return original_put(self, item)
+        if self._maxsize is not None and self._size >= self._maxsize:
+            return False
+        self._size += 1
+        if not hasattr(self, "_ab_pending"):
+            self._ab_pending = deque()
+            self._ab_scheduled = False
+        self._ab_pending.append(item)
+        if not self._ab_scheduled:
+            self._ab_scheduled = True
+            try:
+                self._loop.call_soon_threadsafe(flush, self)
+            except RuntimeError:
+                pass
+        return True
+
+    _AsyncMailbox.put = put
+    return _AsyncMailbox, original_put
 
 
 def process_usage(pid: int) -> dict | None:
@@ -87,6 +126,8 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
     """Measure 10+ independent sessions in one Runtime and isolate the client process."""
     from endpilot import BotOptions, BotState, EventKind, Input, Runtime, event_mask
     from endpilot.session import Session
+    mailbox_cls, original_mailbox_put = (install_mailbox_wakeup_ab()
+        if count == 50 and transport == "raknet" else (None, None))
 
     if not 1 <= count <= 100:
         raise ValueError("capacity count must be 1..100")
@@ -112,7 +153,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
     started = time.monotonic()
 
     def observe(bot, event):
-        if event.__class__.__name__ != "TickEvent" or phase not in ("idle", "active"):
+        if event.__class__.__name__ != "TickEvent" or not (phase in ("idle", "active") or phase.startswith("idle_")):
             return
         ticks[phase][bot].append(int(event.lateness_us))
         if phase == "active":
@@ -158,6 +199,8 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
         expected = elapsed * 20 * len(bots)
         data = {
             "duration_s": round(elapsed, 3),
+            "start_monotonic_s": round(begin, 6),
+            "end_monotonic_s": round(begin + elapsed, 6),
             "remote_actor_motion_skipped": skipped_after - skipped_before if skipped_before is not None else None,
             "tick_observed": executed,
             "tick_expected_approx": round(expected, 1),
@@ -196,6 +239,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
     sample_task = asyncio.create_task(asyncio.sleep(86400), name="capacity-sampler-disabled")
     profile_process = None
     profile_log = None
+    stack_log = None
     try:
         async with Runtime(observe, events=event_mask(EventKind.tick)) as runtime:
             bots = [
@@ -216,19 +260,32 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             await asyncio.sleep(20)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
             if count == 50 and transport == "raknet":
-                # Independent process avoids depending on the measured event loop/GIL.
-                # Limit recording to the first 55 seconds of the 60-second idle stage.
+                # Exact native-ID ↔ Python-thread mapping; sampled from the event loop once.
+                (ROOT / "work" / "capacity_thread_map.json").write_text(
+                    json.dumps([{"name": t.name, "ident": t.ident, "native_id": t.native_id}
+                                for t in threading.enumerate()], indent=2) + "\n")
+                # CPython's signal-handler traceback dumps are intentionally sparse.
+                stack_log = (ROOT / "work" / "capacity_thread_stacks.log").open("w")
+                faulthandler.register(signal.SIGUSR2, file=stack_log, all_threads=True)
                 profile_log = (ROOT / "work" / "capacity_thread_cpu.log").open("w")
                 profile_process = subprocess.Popen(
                     [
                         sys.executable, str(Path(__file__).with_name("capacity_thread_cpu.py")),
-                        "--pid", str(os.getpid()), "--duration", "55",
-                        "--interval", "1",
+                        "--pid", str(os.getpid()), "--duration", "68",
+                        "--interval", "1", "--signal-seconds", "12,26,43,58",
                         "--output", str(ROOT / "work" / "capacity_thread_cpu.csv"),
                     ],
                     stdout=profile_log, stderr=subprocess.STDOUT,
                 )
-            await stage("idle", bots)
+                # ABAB on one Runner, one set of peers, and one constant Idle workload.
+                # No packet is dropped, only redundant loop notifications are coalesced.
+                for label, enabled in (("idle_a1", False), ("idle_b1", True),
+                                       ("idle_a2", False), ("idle_b2", True)):
+                    mailbox_cls._ab_enabled = enabled
+                    await stage(label, bots, seconds=35)
+                mailbox_cls._ab_enabled = False
+            else:
+                await stage("idle", bots)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
             await stage("active", bots)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
@@ -255,13 +312,22 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 "sampler_pid": profile_process.pid,
                 "exit_code": profile_process.returncode,
                 "independent_process": True,
-                "duration_limit_s": 55,
+                "duration_limit_s": 68,
+                "signal_seconds": [12, 26, 43, 58],
+                "thread_map": "capacity_thread_map.json",
+                "python_stacks": "capacity_thread_stacks.log",
                 "interval_s": 1,
                 "raw_csv": "capacity_thread_cpu.csv",
                 "log": "capacity_thread_cpu.log",
             }
         if profile_log is not None:
             profile_log.close()
+        if stack_log is not None:
+            faulthandler.unregister(signal.SIGUSR2)
+            stack_log.close()
+        if mailbox_cls is not None:
+            mailbox_cls._ab_enabled = False
+            mailbox_cls.put = original_mailbox_put
         sample_task.cancel()
         await asyncio.gather(sample_task, return_exceptions=True)
         report["remote_actor_motion_skipped_total"] = getattr(Session, "actor_ablation_skipped", None)
