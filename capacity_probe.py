@@ -192,7 +192,8 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 f"some bots sent no PlayerAuthInput in {label}: {inputs}"
             )
 
-    sample_task = asyncio.create_task(sampler(), name="capacity-sampler")
+    # Isolate the observed 0.7-1.0 s synchronous sampler stalls from RakNet/Event Loop behavior.
+    sample_task = asyncio.create_task(asyncio.sleep(86400), name="capacity-sampler-disabled")
     profile_process = None
     profile_log = None
     try:
