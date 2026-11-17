@@ -25,17 +25,32 @@ def patch_reader_yield():
 
     session_path = Path(distribution("endpilot").locate_file("endpilot/session.py"))
     source = session_path.read_text()
-    anchor = "                    await self.handle(decoded.payload)\n                except _MalformedPacket as error:\n                    self.decode_error(decoded.header.packet_id, str(error), recoverable=False)\n                    raise\n\n    def decode_error(self, packet_id, reason, *, recoverable):\n"
-    replacement = anchor.replace(
-        "\n    def decode_error",
-        "\n            if getattr(Session, \"_capacity_reader_yield\", False):\n                await asyncio.sleep(0)\n\n    def decode_error",
+    conditional_yield = (
+        '            if getattr(Session, "_capacity_reader_yield", False):\n'
+        '                await asyncio.sleep(0)\n'
     )
-    patched = "            if getattr(Session, \"_capacity_reader_yield\", False):\n                await asyncio.sleep(0)\n\n    def decode_error(self, packet_id, reason, *, recoverable):\n"
-    if source.count(patched) == 1 and source.count(anchor) == 0:
+    method = "\n    def decode_error(self, packet_id, reason, *, recoverable):\n"
+    baseline_anchor = (
+        "                    await self.handle(decoded.payload)\n"
+        "                except _MalformedPacket as error:\n"
+        "                    self.decode_error(decoded.header.packet_id, str(error), recoverable=False)\n"
+        "                    raise\n"
+        + method
+    )
+    production_anchor = "\n            await asyncio.sleep(0)\n" + method
+    conditional_anchor = "\n" + conditional_yield + method
+
+    baseline_count = source.count(baseline_anchor)
+    production_count = source.count(production_anchor)
+    conditional_count = source.count(conditional_anchor)
+    if conditional_count == 1 and baseline_count == 0 and production_count == 0:
         return session_path
-    if source.count(anchor) != 1 or source.count(patched):
+    if baseline_count == 1 and production_count == 0 and conditional_count == 0:
+        updated = source.replace(baseline_anchor, baseline_anchor.replace(method, conditional_yield + method), 1)
+    elif production_count == 1 and baseline_count == 0 and conditional_count == 0:
+        updated = source.replace(production_anchor, "\n" + conditional_yield + method, 1)
+    else:
         raise RuntimeError(f"Pinned Session.reader patch anchor is not unique: {session_path}")
-    updated = source.replace(anchor, replacement, 1)
     compile(updated, str(session_path), "exec")
     session_path.write_text(updated)
     return session_path
@@ -294,10 +309,10 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                                        ("idle_b2", True), ("idle_a2", False)):
                     Session._capacity_reader_yield = enabled
                     await stage(label, bots, seconds=35)
-                Session._capacity_reader_yield = False
             else:
                 await stage("idle", bots)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
+            Session._capacity_reader_yield = True
             await stage("active", bots)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
             phase = "teardown"
