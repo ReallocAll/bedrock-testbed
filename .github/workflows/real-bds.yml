@@ -85,6 +85,21 @@ jobs:
             "endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@${ENDPILOT_COMMIT}"
           .venv-client/bin/python -m pip check
           .venv-client/bin/python -m pip show endpilot bedrock-protocol-native
+      # One-off capacity A/B: keep all EndPilot and server inputs identical.
+      - name: Diagnose RakNet 5ms idle pump polling
+        if: ${{ inputs.capacity_bots == '50' && inputs.capacity_transport == 'raknet' }}
+        shell: bash
+        run: |
+          .venv-client/bin/python - <<'PY'
+          from pathlib import Path
+          import raknet._peer
+          path = Path(raknet._peer.__file__)
+          source = path.read_text()
+          old = 'time.sleep(0.001)'
+          assert source.count(old) == 1, 'unexpected raknet==0.4.0 receive pump'
+          path.write_text(source.replace(old, 'time.sleep(0.005)', 1))
+          print('A/B patch: RakNet idle poll 1ms -> 5ms in', path)
+          PY
       - name: Exercise public Typed Packet API against fresh real BDS
         shell: bash
         run: |
