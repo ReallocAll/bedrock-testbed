@@ -260,6 +260,10 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
     sample_task = None
     profile_process = None
     profile_log = None
+    server_profile_process = None
+    server_profile_log = None
+    server_profile_report = None
+    server_sampler_invalid = False
     stack_log = None
     try:
         if count == 50 and transport == "raknet":
@@ -303,6 +307,30 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                         "--output", str(ROOT / "work" / "capacity_thread_cpu.csv"),
                     ],
                     stdout=profile_log, stderr=subprocess.STDOUT,
+                )
+                if server.process is None:
+                    raise RuntimeError("BDS process is unavailable for server CPU sampling")
+                server_pid = server.process.pid
+                server_profile_report = {
+                    "target_pid": server_pid,
+                    "sampler_pid": None,
+                    "exit_code": None,
+                    "independent_process": True,
+                    "duration_limit_s": 205,
+                    "interval_s": 1,
+                    "raw_csv": "capacity_server_thread_cpu.csv",
+                    "thread_map": "capacity_server_thread_map.json",
+                    "log": "capacity_server_thread_cpu.log",
+                }
+                server_profile_log = (ROOT / "work" / "capacity_server_thread_cpu.log").open("w")
+                server_profile_process = subprocess.Popen(
+                    [
+                        sys.executable, str(Path(__file__).with_name("capacity_thread_cpu.py")),
+                        "--pid", str(server_pid), "--duration", "205", "--interval", "1",
+                        "--output", str(ROOT / "work" / "capacity_server_thread_cpu.csv"),
+                        "--thread-map", str(ROOT / "work" / "capacity_server_thread_map.json"),
+                    ],
+                    stdout=server_profile_log, stderr=subprocess.STDOUT,
                 )
                 # Same-process BABA; each setting applies at the end of a complete decoded batch.
                 for label, enabled in (("idle_b1", True), ("idle_a1", False),
@@ -363,6 +391,78 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             }
         if profile_log is not None:
             profile_log.close()
+        if server_profile_process is not None:
+            if server_profile_process.poll() is None:
+                try:
+                    server_profile_process.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    server_profile_process.terminate()
+                    try:
+                        server_profile_process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        server_profile_process.kill()
+                        server_profile_process.wait()
+            server_profile_report["sampler_pid"] = server_profile_process.pid
+            server_profile_report["exit_code"] = server_profile_process.returncode
+        if server_profile_report is not None:
+            server_csv = ROOT / "work" / "capacity_server_thread_cpu.csv"
+            required_server_phases = ("idle_b1", "idle_a1", "idle_b2", "idle_a2", "active")
+            phase_windows = {
+                label: (report["phases"][label]["start_monotonic_s"],
+                       report["phases"][label]["end_monotonic_s"])
+                for label in required_server_phases if label in report["phases"]
+            }
+            delta_samples = {label: set() for label in required_server_phases}
+            delta_rows = 0
+            sample_rows = 0
+            try:
+                with server_csv.open(newline="") as stream:
+                    for row in csv.DictReader(stream):
+                        sample_rows += 1
+                        if not row.get("delta_cpu_ticks"):
+                            continue
+                        try:
+                            sample = int(row["sample"])
+                            sampled_at = float(row["monotonic_s"])
+                            interval = float(row["interval_s"])
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        if interval <= 0:
+                            continue
+                        interval_start = sampled_at - interval
+                        for label, (phase_start, phase_end) in phase_windows.items():
+                            if phase_start <= interval_start and sampled_at <= phase_end:
+                                delta_rows += 1
+                                delta_samples[label].add(sample)
+                                break
+            except (OSError, csv.Error):
+                sample_rows = 0
+                delta_rows = 0
+                delta_samples = {label: set() for label in required_server_phases}
+            server_profile_report["sample_rows"] = sample_rows
+            server_profile_report["delta_rows"] = delta_rows
+            server_profile_report["delta_samples_by_phase"] = {
+                label: len(delta_samples[label]) for label in required_server_phases
+            }
+            missing_phases = [label for label in required_server_phases if not delta_samples[label]]
+            server_profile_report["valid"] = (
+                server_profile_report["exit_code"] == 0
+                and not missing_phases
+            )
+            if not server_profile_report["valid"]:
+                server_sampler_invalid = True
+                message = (
+                    "BDS thread CPU sampler invalid: "
+                    f"exit_code={server_profile_report['exit_code']}, "
+                    f"delta_rows={delta_rows}, missing_phases={missing_phases}"
+                )
+                report["status"] = "FAIL"
+                if not report.get("error"):
+                    report["error"] = message
+                report["acceptance_failures"].append(message)
+            report["server_thread_cpu_profile"] = server_profile_report
+        if server_profile_log is not None:
+            server_profile_log.close()
         if stack_log is not None:
             faulthandler.unregister(signal.SIGUSR2)
             stack_log.close()
@@ -383,3 +483,5 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                                  "returned_packet"))
                 writer.writerows(receive_rows)
         results["capacity"] = {key: value for key, value in report.items() if key != "environment"}
+    if server_sampler_invalid:
+        raise RuntimeError(report["error"])

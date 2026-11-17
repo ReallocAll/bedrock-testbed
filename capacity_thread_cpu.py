@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import signal
 import time
@@ -60,6 +61,7 @@ def main():
     parser.add_argument("--duration", type=float, default=68)
     parser.add_argument("--interval", type=float, default=1)
     parser.add_argument("--signal-seconds", default="")
+    parser.add_argument("--thread-map", type=Path)
     args = parser.parse_args()
     if args.pid <= 0 or not 0 < args.duration <= 240 or not 0 < args.interval <= 5:
         parser.error("invalid pid, duration, or interval")
@@ -77,10 +79,19 @@ def main():
         "delta_voluntary_switches", "delta_nonvoluntary_switches",
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    if args.thread_map is not None:
+        args.thread_map.parent.mkdir(parents=True, exist_ok=True)
+        thread_map_written = False
+        args.thread_map.write_text(json.dumps({
+            "pid": args.pid, "sample_monotonic_s": None, "threads": [],
+        }, indent=2) + "\n")
+    else:
+        thread_map_written = True
     with args.output.open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=columns)
         writer.writeheader()
         sample_index = 0
+        sample_rows = 0
         while True:
             deadline = started + sample_index * args.interval
             delay = deadline - time.monotonic()
@@ -100,6 +111,16 @@ def main():
             current = read_threads(args.pid)
             if not current:
                 break
+            if not thread_map_written:
+                args.thread_map.write_text(json.dumps({
+                    "pid": args.pid,
+                    "sample_monotonic_s": round(captured, 6),
+                    "threads": [
+                        {"tid": tid, "comm": comm, "initial_state": state}
+                        for tid, comm, state, *_ in current
+                    ],
+                }, indent=2) + "\n")
+                thread_map_written = True
             interval = captured - previous_at if previous_at is not None else None
             next_previous = {}
             for tid, comm, state, user, system, sched, wchan, voluntary, nonvoluntary in current:
@@ -129,9 +150,12 @@ def main():
                     "delta_voluntary_switches": delta_vol,
                     "delta_nonvoluntary_switches": delta_nonvol,
                 })
+                sample_rows += 1
             stream.flush()
             previous, previous_at = next_previous, captured
             sample_index += 1
+    if args.thread_map is not None and sample_rows == 0:
+        raise SystemExit("no thread sample rows were written")
 
 
 if __name__ == "__main__":
