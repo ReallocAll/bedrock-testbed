@@ -310,9 +310,9 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 )
                 if server.process is None:
                     raise RuntimeError("BDS process is unavailable for server CPU sampling")
-                server_pid = server.process.pid
+                server_pgid = server.process.pid
                 server_profile_report = {
-                    "target_pid": server_pid,
+                    "target_pgid": server_pgid,
                     "sampler_pid": None,
                     "exit_code": None,
                     "independent_process": True,
@@ -326,7 +326,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 server_profile_process = subprocess.Popen(
                     [
                         sys.executable, str(Path(__file__).with_name("capacity_thread_cpu.py")),
-                        "--pid", str(server_pid), "--duration", "205", "--interval", "1",
+                        "--pgid", str(server_pgid), "--duration", "205", "--interval", "1",
                         "--output", str(ROOT / "work" / "capacity_server_thread_cpu.csv"),
                         "--thread-map", str(ROOT / "work" / "capacity_server_thread_map.json"),
                     ],
@@ -413,18 +413,40 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 for label in required_server_phases if label in report["phases"]
             }
             delta_samples = {label: set() for label in required_server_phases}
+            positive_cpu_samples = {label: set() for label in required_server_phases}
+            positive_cpu_pids = {label: set() for label in required_server_phases}
+            active_child_cpu_samples = {label: set() for label in required_server_phases}
+            active_child_pids = {label: set() for label in required_server_phases}
+            observed_pids = set()
+            process_identities = {}
             delta_rows = 0
             sample_rows = 0
             try:
                 with server_csv.open(newline="") as stream:
                     for row in csv.DictReader(stream):
                         sample_rows += 1
-                        if not row.get("delta_cpu_ticks"):
+                        try:
+                            pid = int(row["pid"])
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        observed_pids.add(pid)
+                        try:
+                            ppid = int(row["ppid"])
+                        except (KeyError, TypeError, ValueError):
+                            ppid = None
+                        process_identities.setdefault(pid, {
+                            "ppid": ppid,
+                            "process_comm": row.get("process_comm", ""),
+                            "exe_basename": row.get("exe_basename", ""),
+                        })
+                        if not row.get("delta_sched_cpu_ns"):
                             continue
                         try:
                             sample = int(row["sample"])
                             sampled_at = float(row["monotonic_s"])
                             interval = float(row["interval_s"])
+                            int(row["sched_cpu_ns"])
+                            delta_sched_cpu_ns = int(row["delta_sched_cpu_ns"])
                         except (KeyError, TypeError, ValueError):
                             continue
                         if interval <= 0:
@@ -434,17 +456,45 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                             if phase_start <= interval_start and sampled_at <= phase_end:
                                 delta_rows += 1
                                 delta_samples[label].add(sample)
+                                if delta_sched_cpu_ns > 0:
+                                    positive_cpu_samples[label].add(sample)
+                                    positive_cpu_pids[label].add(pid)
+                                    if pid != server_profile_report["target_pgid"]:
+                                        active_child_cpu_samples[label].add(sample)
+                                        active_child_pids[label].add(pid)
                                 break
             except (OSError, csv.Error):
                 sample_rows = 0
                 delta_rows = 0
                 delta_samples = {label: set() for label in required_server_phases}
+                positive_cpu_samples = {label: set() for label in required_server_phases}
+                positive_cpu_pids = {label: set() for label in required_server_phases}
+                active_child_cpu_samples = {label: set() for label in required_server_phases}
+                active_child_pids = {label: set() for label in required_server_phases}
+                observed_pids = set()
+                process_identities = {}
             server_profile_report["sample_rows"] = sample_rows
+            server_profile_report["observed_pids"] = sorted(observed_pids)
+            server_profile_report["process_identities_by_pid"] = {
+                str(pid): process_identities[pid] for pid in sorted(process_identities)
+            }
             server_profile_report["delta_rows"] = delta_rows
             server_profile_report["delta_samples_by_phase"] = {
                 label: len(delta_samples[label]) for label in required_server_phases
             }
-            missing_phases = [label for label in required_server_phases if not delta_samples[label]]
+            server_profile_report["positive_cpu_samples_by_phase"] = {
+                label: len(positive_cpu_samples[label]) for label in required_server_phases
+            }
+            server_profile_report["positive_cpu_pids_by_phase"] = {
+                label: sorted(positive_cpu_pids[label]) for label in required_server_phases
+            }
+            server_profile_report["active_child_cpu_samples_by_phase"] = {
+                label: len(active_child_cpu_samples[label]) for label in required_server_phases
+            }
+            server_profile_report["active_child_pids_by_phase"] = {
+                label: sorted(active_child_pids[label]) for label in required_server_phases
+            }
+            missing_phases = [label for label in required_server_phases if not active_child_cpu_samples[label]]
             server_profile_report["valid"] = (
                 server_profile_report["exit_code"] == 0
                 and not missing_phases
@@ -454,7 +504,8 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 message = (
                     "BDS thread CPU sampler invalid: "
                     f"exit_code={server_profile_report['exit_code']}, "
-                    f"delta_rows={delta_rows}, missing_phases={missing_phases}"
+                    f"active_child_cpu_samples={server_profile_report['active_child_cpu_samples_by_phase']}, "
+                    f"missing_phases={missing_phases}"
                 )
                 report["status"] = "FAIL"
                 if not report.get("error"):

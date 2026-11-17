@@ -54,17 +54,59 @@ def read_threads(pid: int):
     return rows
 
 
+def process_group_pids(pgid: int):
+    pids = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdecimal():
+            continue
+        try:
+            raw = (entry / "stat").read_text()
+            fields = raw[raw.rfind(")") + 2:].split()
+            if fields[0] not in ("Z", "X") and int(fields[2]) == pgid:
+                pids.append(int(entry.name))
+        except (OSError, ValueError, IndexError):
+            continue
+    return sorted(pids)
+
+
+def read_group_threads(pgid: int):
+    rows = []
+    for pid in process_group_pids(pgid):
+        try:
+            raw = Path(f"/proc/{pid}/stat").read_text()
+            end = raw.rfind(")")
+            fields = raw[end + 2:].split()
+            ppid = int(fields[1])
+            process_comm = raw[raw.find("(") + 1:end]
+        except (OSError, ValueError, IndexError):
+            ppid, process_comm = None, ""
+        try:
+            exe_basename = Path(os.readlink(f"/proc/{pid}/exe")).name
+        except OSError:
+            exe_basename = ""
+        rows.extend(
+            (pid, ppid, process_comm, exe_basename, *thread)
+            for thread in read_threads(pid)
+        )
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pid", type=int, required=True)
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--pid", type=int)
+    target.add_argument("--pgid", type=int)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--duration", type=float, default=68)
     parser.add_argument("--interval", type=float, default=1)
     parser.add_argument("--signal-seconds", default="")
     parser.add_argument("--thread-map", type=Path)
     args = parser.parse_args()
-    if args.pid <= 0 or not 0 < args.duration <= 240 or not 0 < args.interval <= 5:
+    target_id = args.pid if args.pid is not None else args.pgid
+    if target_id <= 0 or not 0 < args.duration <= 240 or not 0 < args.interval <= 5:
         parser.error("invalid pid, duration, or interval")
+    if args.pgid is not None and args.signal_seconds:
+        parser.error("--signal-seconds is only supported with --pid")
     signals = sorted(float(x) for x in args.signal_seconds.split(",") if x)
     tick_rate = os.sysconf("SC_CLK_TCK")
     started = time.monotonic()
@@ -78,12 +120,18 @@ def main():
         "wchan", "voluntary_switches", "nonvoluntary_switches",
         "delta_voluntary_switches", "delta_nonvoluntary_switches",
     )
+    if args.pgid is not None:
+        columns = (
+            *columns[:4], "pid", "ppid", "process_comm", "exe_basename",
+            *columns[4:12], "delta_sched_cpu_ns", *columns[12:],
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if args.thread_map is not None:
         args.thread_map.parent.mkdir(parents=True, exist_ok=True)
         thread_map_written = False
+        map_identity = {"pgid": args.pgid} if args.pgid is not None else {"pid": args.pid}
         args.thread_map.write_text(json.dumps({
-            "pid": args.pid, "sample_monotonic_s": None, "threads": [],
+            **map_identity, "sample_monotonic_s": None, "threads": [],
         }, indent=2) + "\n")
     else:
         thread_map_written = True
@@ -108,32 +156,39 @@ def main():
                     print(f"stack signal at {elapsed:.3f}s, threshold={threshold}", flush=True)
                 except ProcessLookupError:
                     pass
-            current = read_threads(args.pid)
+            current = (read_group_threads(args.pgid) if args.pgid is not None else
+                       [(args.pid, None, "", "", *thread)
+                        for thread in read_threads(args.pid)])
             if not current:
                 break
             if not thread_map_written:
                 args.thread_map.write_text(json.dumps({
-                    "pid": args.pid,
+                    **map_identity,
                     "sample_monotonic_s": round(captured, 6),
                     "threads": [
-                        {"tid": tid, "comm": comm, "initial_state": state}
-                        for tid, comm, state, *_ in current
+                        {**({"pid": pid, "ppid": ppid, "process_comm": process_comm,
+                             "exe_basename": exe_basename} if args.pgid is not None else {}),
+                         "tid": tid, "comm": comm, "initial_state": state}
+                        for pid, ppid, process_comm, exe_basename, tid, comm, state, *_ in current
                     ],
                 }, indent=2) + "\n")
                 thread_map_written = True
             interval = captured - previous_at if previous_at is not None else None
             next_previous = {}
-            for tid, comm, state, user, system, sched, wchan, voluntary, nonvoluntary in current:
+            for pid, ppid, process_comm, exe_basename, tid, comm, state, user, system, sched, wchan, voluntary, nonvoluntary in current:
                 total = user + system
                 wait = sched[1]
-                old = previous.get(tid)
-                previous_values = (total, wait, voluntary, nonvoluntary)
-                next_previous[tid] = previous_values
+                thread_key = (pid, tid)
+                old = previous.get(thread_key)
+                previous_values = (total, sched[0], wait, voluntary, nonvoluntary)
+                next_previous[thread_key] = previous_values
                 delta = max(0, total - old[0]) if old is not None else None
-                delta_wait = max(0, wait - old[1]) if old and wait is not None and old[1] is not None else None
-                delta_vol = max(0, voluntary - old[2]) if old and voluntary is not None and old[2] is not None else None
-                delta_nonvol = max(0, nonvoluntary - old[3]) if old and nonvoluntary is not None and old[3] is not None else None
-                writer.writerow({
+                delta_sched_cpu = (max(0, sched[0] - old[1])
+                                   if old and sched[0] is not None and old[1] is not None else None)
+                delta_wait = max(0, wait - old[2]) if old and wait is not None and old[2] is not None else None
+                delta_vol = max(0, voluntary - old[3]) if old and voluntary is not None and old[3] is not None else None
+                delta_nonvol = max(0, nonvoluntary - old[4]) if old and nonvoluntary is not None and old[4] is not None else None
+                row = {
                     "sample": sample_index, "monotonic_s": round(captured, 6),
                     "elapsed_s": round(elapsed, 4),
                     "interval_s": round(interval, 4) if interval else "",
@@ -149,7 +204,14 @@ def main():
                     "nonvoluntary_switches": nonvoluntary,
                     "delta_voluntary_switches": delta_vol,
                     "delta_nonvoluntary_switches": delta_nonvol,
-                })
+                }
+                if args.pgid is not None:
+                    row["pid"] = pid
+                    row["ppid"] = ppid
+                    row["process_comm"] = process_comm
+                    row["exe_basename"] = exe_basename
+                    row["delta_sched_cpu_ns"] = delta_sched_cpu
+                writer.writerow(row)
                 sample_rows += 1
             stream.flush()
             previous, previous_at = next_previous, captured
