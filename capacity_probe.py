@@ -140,6 +140,48 @@ def patch_reader_yield():
         source = source.replace(marker, helper + marker, 1)
     elif source.count(timing_marker) != 1:
         raise RuntimeError(f"Pinned Session timing helper anchor is not unique: {session_path}")
+
+    # Keep the ablation at the two remote movement dispatch points only. The
+    # local-player ID 19 path above remains live, as do decode, metrics, and
+    # packet_decoded delivery in the reader.
+    state_method = "    def handle_state(self, packet):\n"
+    id19_remote = (
+        "            else:\n"
+        "                actor = self.actor_state.get(packet.player_id)\n"
+        "                if actor is not None and actor.type == \"minecraft:player\":\n"
+        "                    self.move_actor(actor, vec(packet.pos), packet.rot.x, packet.rot.y, packet.y_head_rot)\n"
+    )
+    id19_remote_patched = (
+        "            else:\n"
+        "                if not getattr(Session, \"_capacity_skip_remote_actor_motion\", False):\n"
+        "                    actor = self.actor_state.get(packet.player_id)\n"
+        "                    if actor is not None and actor.type == \"minecraft:player\":\n"
+        "                        self.move_actor(actor, vec(packet.pos), packet.rot.x, packet.rot.y, packet.y_head_rot)\n"
+    )
+    motion_branch = (
+        "        elif id in (18, 111):\n"
+        "            motion = self.actor_state.motion(packet, self.options.protocol)\n"
+        "            if motion is not None:\n"
+        "                self.move_actor(*motion)\n"
+    )
+    motion_branch_patched = (
+        "        elif id in (18, 111):\n"
+        "            if not getattr(Session, \"_capacity_skip_remote_actor_motion\", False):\n"
+        "                motion = self.actor_state.motion(packet, self.options.protocol)\n"
+        "                if motion is not None:\n"
+        "                    self.move_actor(*motion)\n"
+    )
+    if source.count(state_method) != 1:
+        raise RuntimeError(f"Pinned Session.handle_state anchor is not unique: {session_path}")
+    branch_counts = (
+        source.count(id19_remote), source.count(id19_remote_patched),
+        source.count(motion_branch), source.count(motion_branch_patched),
+    )
+    if branch_counts == (1, 0, 1, 0):
+        source = source.replace(id19_remote, id19_remote_patched, 1)
+        source = source.replace(motion_branch, motion_branch_patched, 1)
+    elif branch_counts != (0, 1, 0, 1):
+        raise RuntimeError(f"Pinned Session.handle_state movement anchors are not unique: {session_path}")
     compile(source, str(session_path), "exec")
     if source != updated:
         session_path.write_text(source)
@@ -260,6 +302,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
     from endpilot import BotOptions, BotState, EventKind, Input, Runtime, event_mask
     from endpilot.session import Session
     Session._capacity_reader_yield = False
+    Session._capacity_skip_remote_actor_motion = False
     endpoint = ("raknet://" if transport == "raknet" else "http://") + "127.0.0.1:19132"
     stagger_ms = 8000 if transport == "raknet" else 1000
     names = [PLAYER, *(f"EndPilotLoad{i:03d}" for i in range(1, count))]
@@ -276,13 +319,25 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
         "phases": {},
         "acceptance_failures": [],
     }
+    if count == 50 and transport == "raknet":
+        report["actor_motion_ablation"] = {
+            "reader_yield": True,
+            "phases": {
+                "actor_on1": {"skip_remote_actor_motion": False},
+                "actor_off1": {"skip_remote_actor_motion": True},
+                "actor_on2": {"skip_remote_actor_motion": False},
+                "actor_off2": {"skip_remote_actor_motion": True},
+            },
+        }
     ticks = defaultdict(lambda: defaultdict(list))
     probe_samples = []
     phase = "join"
     started = time.monotonic()
 
     def observe(bot, event):
-        if event.__class__.__name__ != "TickEvent" or not (phase in ("idle", "active") or phase.startswith("idle_")):
+        if event.__class__.__name__ != "TickEvent" or not (
+            phase in ("idle", "active") or phase.startswith(("idle_", "actor_"))
+        ):
             return
         ticks[phase][bot].append(int(event.lateness_us))
         if phase == "active":
@@ -340,6 +395,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
         expected = elapsed * 20 * len(bots)
         data = {
             "duration_s": round(elapsed, 3),
+            "skip_remote_actor_motion": bool(Session._capacity_skip_remote_actor_motion),
             "start_monotonic_s": round(begin, 6),
             "end_monotonic_s": round(begin + elapsed, 6),
             "tick_observed": executed,
@@ -456,11 +512,14 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                     ],
                     stdout=server_profile_log, stderr=subprocess.STDOUT,
                 )
-                # Same-process BABA; each setting applies at the end of a complete decoded batch.
-                for label, enabled in (("idle_b1", True), ("idle_a1", False),
-                                       ("idle_b2", True), ("idle_a2", False)):
-                    Session._capacity_reader_yield = enabled
+                # Same-process ABAB actor-motion ablation with reader yielding held on.
+                # Each setting applies at the end of a complete decoded batch.
+                Session._capacity_reader_yield = True
+                for label, skip_remote_motion in (("actor_on1", False), ("actor_off1", True),
+                                                   ("actor_on2", False), ("actor_off2", True)):
+                    Session._capacity_skip_remote_actor_motion = skip_remote_motion
                     await stage(label, bots, seconds=35)
+                Session._capacity_skip_remote_actor_motion = False
             else:
                 await stage("idle", bots)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
@@ -481,6 +540,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
         raise
     finally:
         Session._capacity_reader_yield = False
+        Session._capacity_skip_remote_actor_motion = False
         if receive_timing is not None:
             peer_cls, original_receive, receive_rows = receive_timing
             peer_cls.receive = original_receive
@@ -532,7 +592,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             server_profile_report["exit_code"] = server_profile_process.returncode
         if server_profile_report is not None:
             server_csv = ROOT / "work" / "capacity_server_thread_cpu.csv"
-            required_server_phases = ("idle_b1", "idle_a1", "idle_b2", "idle_a2", "active")
+            required_server_phases = ("actor_on1", "actor_off1", "actor_on2", "actor_off2", "active")
             phase_windows = {
                 label: (report["phases"][label]["start_monotonic_s"],
                        report["phases"][label]["end_monotonic_s"])
