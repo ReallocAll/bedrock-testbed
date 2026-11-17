@@ -85,6 +85,53 @@ jobs:
             "endpilot[raknet] @ git+https://github.com/ReallocAll/endpilot.git@${ENDPILOT_COMMIT}"
           .venv-client/bin/python -m pip check
           .venv-client/bin/python -m pip show endpilot bedrock-protocol-native
+      # Temporary targeted optimization for one 50-Bot A/B, not an SDK release.
+      - name: Test immutable ActorSnapshot motion fast clone
+        if: ${{ inputs.capacity_bots == '50' && inputs.capacity_transport == 'raknet' }}
+        shell: bash
+        run: |
+          .venv-client/bin/python - <<'PY'
+          from pathlib import Path
+          from dataclasses import replace
+          import importlib
+          import endpilot._actors as actors
+          from endpilot.observations import ActorSnapshot
+          from endpilot.types import Vec3
+          path = Path(actors.__file__)
+          source = path.read_text()
+          original = """    def move(self, actor, position, pitch, yaw, head):
+                  actor = replace(actor, position=position, pitch=pitch, yaw=yaw, head_yaw=head)
+                  self.actors[actor.runtime_id] = actor
+                  return actor
+          """
+          replacement = """    def move(self, actor, position, pitch, yaw, head):
+                  # All unchanged frozen snapshot fields are already projected.
+                  copied = object.__new__(type(actor))
+                  for field_name in actor.__dataclass_fields__:
+                      object.__setattr__(copied, field_name, getattr(actor, field_name))
+                  object.__setattr__(copied, "position", position)
+                  object.__setattr__(copied, "pitch", pitch)
+                  object.__setattr__(copied, "yaw", yaw)
+                  object.__setattr__(copied, "head_yaw", head)
+                  self.actors[actor.runtime_id] = copied
+                  return copied
+          """
+          # Remove YAML heredoc indentation inside source literals.
+          original = "\n".join(line[10:] if line.startswith("          ") else line for line in original.split("\n"))
+          replacement = "\n".join(line[10:] if line.startswith("          ") else line for line in replacement.split("\n"))
+          assert source.count(original) == 1, "Unexpected pinned EndPilot _ActorState.move"
+          path.write_text(source.replace(original, replacement, 1))
+          importlib.reload(actors)
+          before = ActorSnapshot(1, 2, "minecraft:player", Vec3())
+          pos = Vec3(1, 2, 3)
+          state = actors._ActorState(None)
+          state.add(before)
+          actual = state.move(before, pos, 10.0, 20.0, 30.0)
+          expected = replace(before, position=pos, pitch=10.0, yaw=20.0, head_yaw=30.0)
+          assert actual == expected and actual is not before and state.get(1) is actual
+          assert before.position == Vec3() and actual.position == pos
+          print("ActorSnapshot fast clone A/B patch and basic snapshot equivalence passed")
+          PY
       - name: Exercise public Typed Packet API against fresh real BDS
         shell: bash
         run: |
