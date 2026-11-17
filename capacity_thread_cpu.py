@@ -61,7 +61,7 @@ def main():
     parser.add_argument("--interval", type=float, default=1)
     parser.add_argument("--signal-seconds", default="")
     args = parser.parse_args()
-    if args.pid <= 0 or not 0 < args.duration <= 150 or not 0 < args.interval <= 5:
+    if args.pid <= 0 or not 0 < args.duration <= 240 or not 0 < args.interval <= 5:
         parser.error("invalid pid, duration, or interval")
     signals = sorted(float(x) for x in args.signal_seconds.split(",") if x)
     tick_rate = os.sysconf("SC_CLK_TCK")

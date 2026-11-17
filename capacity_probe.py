@@ -12,46 +12,77 @@ import re
 import subprocess
 import sys
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 from pathlib import Path
 
 from server import ROOT, PLAYER, PLAYER_COUNT, Server
 
 
 
-def install_mailbox_wakeup_ab():
-    """Diagnostics only: compare per-packet and per-peer coalesced event-loop wakeups."""
+def patch_reader_yield():
+    """Patch only the pinned installed copy, preserving packet handling and ordering."""
+    from importlib.metadata import distribution
+
+    session_path = Path(distribution("endpilot").locate_file("endpilot/session.py"))
+    source = session_path.read_text()
+    anchor = "                    await self.handle(decoded.payload)\n                except _MalformedPacket as error:\n                    self.decode_error(decoded.header.packet_id, str(error), recoverable=False)\n                    raise\n\n    def decode_error(self, packet_id, reason, *, recoverable):\n"
+    replacement = anchor.replace(
+        "\n    def decode_error",
+        "\n            if getattr(Session, \"_capacity_reader_yield\", False):\n                await asyncio.sleep(0)\n\n    def decode_error",
+    )
+    patched = "            if getattr(Session, \"_capacity_reader_yield\", False):\n                await asyncio.sleep(0)\n\n    def decode_error(self, packet_id, reason, *, recoverable):\n"
+    if source.count(patched) == 1 and source.count(anchor) == 0:
+        return session_path
+    if source.count(anchor) != 1 or source.count(patched):
+        raise RuntimeError(f"Pinned Session.reader patch anchor is not unique: {session_path}")
+    updated = source.replace(anchor, replacement, 1)
+    compile(updated, str(session_path), "exec")
+    session_path.write_text(updated)
+    return session_path
+
+
+def install_mailbox_tracking():
+    """Track mailbox instances without changing mailbox operations or ordering."""
     from raknet.asyncio import _AsyncMailbox
 
-    original_put = _AsyncMailbox.put
-    _AsyncMailbox._ab_enabled = False
+    mailboxes = []
+    original_init = _AsyncMailbox.__init__
 
-    def flush(self):
-        pending = self._ab_pending
-        while pending:
-            self._queue.put_nowait(pending.popleft())
-        self._ab_scheduled = False
+    def mailbox_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        mailboxes.append(self)
 
-    def put(self, item):
-        if not _AsyncMailbox._ab_enabled:
-            return original_put(self, item)
-        if self._maxsize is not None and self._size >= self._maxsize:
-            return False
-        self._size += 1
-        if not hasattr(self, "_ab_pending"):
-            self._ab_pending = deque()
-            self._ab_scheduled = False
-        self._ab_pending.append(item)
-        if not self._ab_scheduled:
-            self._ab_scheduled = True
-            try:
-                self._loop.call_soon_threadsafe(flush, self)
-            except RuntimeError:
-                pass
-        return True
+    _AsyncMailbox.__init__ = mailbox_init
+    return _AsyncMailbox, original_init, mailboxes
 
-    _AsyncMailbox.put = put
-    return _AsyncMailbox, original_put
+
+def install_receive_timing(stage):
+    """Sample total RakPeer.receive Python-call duration, including native Receive and GIL reacquisition/scheduling."""
+    from raknet.raw import RakPeer
+
+    original_receive = RakPeer.receive
+    receive_counter = threading.local()
+    receive_rows = []
+
+    def receive(self, *args, **kwargs):
+        call_count = getattr(receive_counter, "count", 0) + 1
+        receive_counter.count = call_count
+        if call_count % 1024:
+            return original_receive(self, *args, **kwargs)
+        native_id = threading.get_native_id()
+        stage_label = stage()
+        begin = time.perf_counter_ns()
+        returned_packet = False
+        try:
+            result = original_receive(self, *args, **kwargs)
+            returned_packet = result is not None
+            return result
+        finally:
+            receive_rows.append((time.monotonic(), stage_label, native_id,
+                                 (time.perf_counter_ns() - begin) / 1000, returned_packet))
+
+    RakPeer.receive = receive
+    return RakPeer, original_receive, receive_rows
 
 
 def process_usage(pid: int) -> dict | None:
@@ -68,21 +99,6 @@ def process_usage(pid: int) -> dict | None:
         }
     except (OSError, ValueError, IndexError):
         return None
-
-
-def resource_snapshot(server: Server) -> dict:
-    client = process_usage(os.getpid())
-    members = Server.group_members(server.process.pid) if server.process else []
-    processes = [item for pid in members if (item := process_usage(pid)) is not None]
-    return {
-        "client": client,
-        "server": {
-            key: sum(p[key] for p in processes)
-            for key in ("cpu_ticks", "rss_kib", "threads", "fds")
-        },
-        "server_pids": len(processes),
-        "tasks": len(asyncio.all_tasks()),
-    }
 
 
 def cpu_cores(before: dict, after: dict, duration: float) -> float | None:
@@ -124,13 +140,13 @@ def check_players(server: Server, names: list[str], expected: int) -> dict:
 
 async def exercise_capacity(server: Server, results: dict, transport: str, count: int) -> None:
     """Measure 10+ independent sessions in one Runtime and isolate the client process."""
-    from endpilot import BotOptions, BotState, EventKind, Input, Runtime, event_mask
-    from endpilot.session import Session
-    mailbox_cls, original_mailbox_put = (install_mailbox_wakeup_ab()
-        if count == 50 and transport == "raknet" else (None, None))
-
     if not 1 <= count <= 100:
         raise ValueError("capacity count must be 1..100")
+    if count == 50 and transport == "raknet":
+        patch_reader_yield()
+    from endpilot import BotOptions, BotState, EventKind, Input, Runtime, event_mask
+    from endpilot.session import Session
+    Session._capacity_reader_yield = False
     endpoint = ("raknet://" if transport == "raknet" else "http://") + "127.0.0.1:19132"
     stagger_ms = 8000 if transport == "raknet" else 1000
     names = [PLAYER, *(f"EndPilotLoad{i:03d}" for i in range(1, count))]
@@ -148,7 +164,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
         "acceptance_failures": [],
     }
     ticks = defaultdict(lambda: defaultdict(list))
-    samples = []
+    probe_samples = []
     phase = "join"
     started = time.monotonic()
 
@@ -160,38 +176,29 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             status = bot.get_status()
             bot.set_input(Input(position=status.position, yaw=float(event.tick % 360)))
 
-    async def sampler():
+    async def sampler(mailboxes):
+        previous_sample = time.monotonic()
         while True:
-            snapshot_started_ns = time.perf_counter_ns()
-            snap = resource_snapshot(server)
-            snapshot_duration_ms = round((time.perf_counter_ns() - snapshot_started_ns) / 1_000_000, 3)
-            samples.append({
-                "snapshot_duration_ms": snapshot_duration_ms,
-                "elapsed_s": round(time.monotonic() - started, 3), "phase": phase,
-                "client_cpu_ticks": snap["client"]["cpu_ticks"] if snap["client"] else None,
-                "client_rss_kib": snap["client"]["rss_kib"] if snap["client"] else None,
-                "client_threads": snap["client"]["threads"] if snap["client"] else None,
-                "client_fds": snap["client"]["fds"] if snap["client"] else None,
-                "server_cpu_ticks": snap["server"]["cpu_ticks"],
-                "server_rss_kib": snap["server"]["rss_kib"],
-                "server_threads": snap["server"]["threads"],
-                "server_pids": snap["server_pids"],
-                "tasks": snap["tasks"],
-                "cgroup_throttled_usec": cgroup_throttle().get("throttled_usec"),
+            now = time.monotonic()
+            sizes = [getattr(box, "_size", 0) for box in mailboxes]
+            probe_samples.append({
+                "elapsed_s": round(now - started, 3), "phase": phase,
+                "sample_gap_ms": round((now - previous_sample) * 1000, 3),
+                "mailbox_size_total": sum(sizes), "mailbox_size_max": max(sizes, default=0),
+                "mailboxes_nonempty": sum(size > 0 for size in sizes),
             })
+            previous_sample = now
             await asyncio.sleep(1)
 
     async def stage(label, bots, seconds=60):
         nonlocal phase
         phase = label
-        beginning = resource_snapshot(server)
-        skipped_before = getattr(Session, "actor_ablation_skipped", None)
+        beginning = process_usage(os.getpid())
         inputs_before = {bot: bot.capture_statistics().play_packet_counts_out[144] for bot in bots}
         begin = time.monotonic()
         await asyncio.sleep(seconds)
         elapsed = time.monotonic() - begin
-        ending = resource_snapshot(server)
-        skipped_after = getattr(Session, "actor_ablation_skipped", None)
+        ending = process_usage(os.getpid())
         inputs = {names[i]: bot.capture_statistics().play_packet_counts_out[144] - inputs_before[bot]
                   for i, bot in enumerate(bots)}
         lateness = [value for bot in bots for value in ticks[label][bot]]
@@ -201,7 +208,6 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             "duration_s": round(elapsed, 3),
             "start_monotonic_s": round(begin, 6),
             "end_monotonic_s": round(begin + elapsed, 6),
-            "remote_actor_motion_skipped": skipped_after - skipped_before if skipped_before is not None else None,
             "tick_observed": executed,
             "tick_expected_approx": round(expected, 1),
             "tick_missing_fraction_approx": round(max(0, 1 - executed / expected), 5),
@@ -209,13 +215,11 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             "lateness_us_p95": pctl(lateness, 0.95),
             "lateness_us_p99": pctl(lateness, 0.99),
             "lateness_us_max": max(lateness, default=None),
-            "client_cpu_cores": cpu_cores(beginning["client"], ending["client"], elapsed),
-            "server_cpu_cores": cpu_cores(beginning["server"], ending["server"], elapsed),
-            "client_rss_kib_end": ending["client"]["rss_kib"] if ending["client"] else None,
-            "server_rss_kib_end": ending["server"]["rss_kib"],
+            "client_cpu_cores": cpu_cores(beginning, ending, elapsed),
+            "client_rss_kib_end": ending["rss_kib"] if ending else None,
             "input_packets_per_bot": inputs,
             "input_packets_per_second": round(sum(inputs.values()) / elapsed, 3),
-            "tasks_end": ending["tasks"],
+            "tasks_end": len(asyncio.all_tasks()),
         }
         report["phases"][label] = data
         # Record capacity failures without cutting off subsequent diagnostic stages.
@@ -235,12 +239,16 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 f"some bots sent no PlayerAuthInput in {label}: {inputs}"
             )
 
-    # Isolate the observed 0.7-1.0 s synchronous sampler stalls from RakNet/Event Loop behavior.
-    sample_task = asyncio.create_task(asyncio.sleep(86400), name="capacity-sampler-disabled")
+    # The timed diagnostics below avoid synchronous process-group scans in the event loop.
+    mailbox_tracking = None
+    receive_timing = None
+    sample_task = None
     profile_process = None
     profile_log = None
     stack_log = None
     try:
+        if count == 50 and transport == "raknet":
+            mailbox_tracking = install_mailbox_tracking()
         async with Runtime(observe, events=event_mask(EventKind.tick)) as runtime:
             bots = [
                 runtime.add_bot(BotOptions(
@@ -260,6 +268,10 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             await asyncio.sleep(20)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
             if count == 50 and transport == "raknet":
+                # All peers and their mailboxes now exist; begin low-rate sampling after warmup.
+                mailboxes = mailbox_tracking[2]
+                sample_task = asyncio.create_task(sampler(mailboxes), name="capacity-probe-sampler")
+                receive_timing = install_receive_timing(lambda: phase)
                 # Exact native-ID ↔ Python-thread mapping; sampled from the event loop once.
                 (ROOT / "work" / "capacity_thread_map.json").write_text(
                     json.dumps([{"name": t.name, "ident": t.ident, "native_id": t.native_id}
@@ -271,19 +283,18 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 profile_process = subprocess.Popen(
                     [
                         sys.executable, str(Path(__file__).with_name("capacity_thread_cpu.py")),
-                        "--pid", str(os.getpid()), "--duration", "68",
-                        "--interval", "1", "--signal-seconds", "12,26,43,58",
+                        "--pid", str(os.getpid()), "--duration", "205",
+                        "--interval", "1", "--signal-seconds", "12,47,82,117,170,190",
                         "--output", str(ROOT / "work" / "capacity_thread_cpu.csv"),
                     ],
                     stdout=profile_log, stderr=subprocess.STDOUT,
                 )
-                # ABAB on one Runner, one set of peers, and one constant Idle workload.
-                # No packet is dropped, only redundant loop notifications are coalesced.
+                # Same-process ABAB; each setting applies at the end of a complete decoded batch.
                 for label, enabled in (("idle_a1", False), ("idle_b1", True),
                                        ("idle_a2", False), ("idle_b2", True)):
-                    mailbox_cls._ab_enabled = enabled
+                    Session._capacity_reader_yield = enabled
                     await stage(label, bots, seconds=35)
-                mailbox_cls._ab_enabled = False
+                Session._capacity_reader_yield = False
             else:
                 await stage("idle", bots)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
@@ -300,20 +311,35 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
         report["error"] = f"{type(error).__name__}: {error}"
         raise
     finally:
+        Session._capacity_reader_yield = False
+        if receive_timing is not None:
+            peer_cls, original_receive, receive_rows = receive_timing
+            peer_cls.receive = original_receive
+        else:
+            receive_rows = []
+        if mailbox_tracking is not None:
+            mailbox_cls, original_init, _ = mailbox_tracking
+            mailbox_cls.__init__ = original_init
+        if sample_task is not None:
+            sample_task.cancel()
+            await asyncio.gather(sample_task, return_exceptions=True)
         if profile_process is not None:
             if profile_process.poll() is None:
-                profile_process.terminate()
                 try:
-                    profile_process.wait(timeout=2)
+                    profile_process.wait(timeout=8)
                 except subprocess.TimeoutExpired:
-                    profile_process.kill()
-                    profile_process.wait()
+                    profile_process.terminate()
+                    try:
+                        profile_process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        profile_process.kill()
+                        profile_process.wait()
             report["thread_cpu_profile"] = {
                 "sampler_pid": profile_process.pid,
                 "exit_code": profile_process.returncode,
                 "independent_process": True,
-                "duration_limit_s": 68,
-                "signal_seconds": [12, 26, 43, 58],
+                "duration_limit_s": 205,
+                "signal_seconds": [12, 47, 82, 117, 170, 190],
                 "thread_map": "capacity_thread_map.json",
                 "python_stacks": "capacity_thread_stacks.log",
                 "interval_s": 1,
@@ -325,19 +351,20 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
         if stack_log is not None:
             faulthandler.unregister(signal.SIGUSR2)
             stack_log.close()
-        if mailbox_cls is not None:
-            mailbox_cls._ab_enabled = False
-            mailbox_cls.put = original_mailbox_put
-        sample_task.cancel()
-        await asyncio.gather(sample_task, return_exceptions=True)
-        report["remote_actor_motion_skipped_total"] = getattr(Session, "actor_ablation_skipped", None)
         report["environment"]["cpu_stat_final"] = cgroup_throttle()
-        report["samples"] = len(samples)
+        report["probe_samples"] = len(probe_samples)
         work = ROOT / "work"
         (work / "capacity.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
-        if samples:
-            with (work / "capacity_samples.csv").open("w", newline="") as fh:
-                writer = csv.DictWriter(fh, fieldnames=list(samples[0]))
+        if probe_samples:
+            with (work / "capacity_probe_samples.csv").open("w", newline="") as fh:
+                writer = csv.DictWriter(fh, fieldnames=list(probe_samples[0]))
                 writer.writeheader()
-                writer.writerows(samples)
+                writer.writerows(probe_samples)
+        if receive_rows:
+            with (work / "capacity_rakpeer_receive.csv").open("w", newline="") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(("monotonic_s", "phase", "native_thread_id",
+                                 "total_python_call_duration_us_including_native_receive_gil_reacquisition_and_scheduling",
+                                 "returned_packet"))
+                writer.writerows(receive_rows)
         results["capacity"] = {key: value for key, value in report.items() if key != "environment"}
