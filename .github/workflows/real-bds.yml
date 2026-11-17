@@ -116,9 +116,6 @@ jobs:
                   self.actors[actor.runtime_id] = copied
                   return copied
           """
-          # Remove YAML heredoc indentation inside source literals.
-          original = "\n".join(line[10:] if line.startswith("          ") else line for line in original.split("\n"))
-          replacement = "\n".join(line[10:] if line.startswith("          ") else line for line in replacement.split("\n"))
           assert source.count(original) == 1, "Unexpected pinned EndPilot _ActorState.move"
           path.write_text(source.replace(original, replacement, 1))
           importlib.reload(actors)
