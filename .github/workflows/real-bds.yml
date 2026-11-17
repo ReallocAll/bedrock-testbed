@@ -122,6 +122,8 @@ jobs:
             work/capacity_samples.csv
             work/capacity_thread_cpu.csv
             work/capacity_thread_cpu.log
+            work/capacity_main_profile.txt
+            work/capacity_main.pstats
             work/bds.log
             work/server/version.txt
             work/server/server.properties
