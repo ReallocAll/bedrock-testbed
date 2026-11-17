@@ -95,29 +95,18 @@ jobs:
           import endpilot.session as module
           path = Path(module.__file__)
           source = path.read_text()
-          original_player = '''                if actor is not None and actor.type == "minecraft:player":
-                    self.move_actor(actor, vec(packet.pos), packet.rot.x, packet.rot.y, packet.y_head_rot)
-'''
-          ablated_player = '''                if actor is not None and actor.type == "minecraft:player":
-                    Session.actor_ablation_skipped += 1
-'''
-          original_motion = '''        elif id in (18, 111):
-            motion = self.actor_state.motion(packet, self.options.protocol)
-            if motion is not None:
-                self.move_actor(*motion)
-'''
-          ablated_motion = '''        elif id in (18, 111):
-            if self.actor_state.get(packet.move_data.runtime_id) is not None:
-                Session.actor_ablation_skipped += 1
-'''
+          original_player = "                if actor is not None and actor.type == \"minecraft:player\":\n                    self.move_actor(actor, vec(packet.pos), packet.rot.x, packet.rot.y, packet.y_head_rot)\n"
+          ablated_player = "                if actor is not None and actor.type == \"minecraft:player\":\n                    Session.actor_ablation_skipped += 1\n"
+          original_motion = "        elif id in (18, 111):\n            motion = self.actor_state.motion(packet, self.options.protocol)\n            if motion is not None:\n                self.move_actor(*motion)\n"
+          ablated_motion = "        elif id in (18, 111):\n            if self.actor_state.get(packet.move_data.runtime_id) is not None:\n                Session.actor_ablation_skipped += 1\n"
           for original in (original_player, original_motion, "class Session:\n"):
-              assert source.count(original) == 1, "Pinned Session path changed"
+              assert source.count(original) == 1, 'Pinned Session path changed'
           source = source.replace("class Session:\n", "class Session:\n    actor_ablation_skipped = 0\n", 1)
           source = source.replace(original_player, ablated_player, 1)
           source = source.replace(original_motion, ablated_motion, 1)
-          compile(source, str(path), "exec")
+          compile(source, str(path), 'exec')
           path.write_text(source)
-          print("Actor motion ablation patched: MovePlayer(remote), MoveActorAbsolute/Delta(known actor)")
+          print('Actor motion ablation patched: MovePlayer(remote), MoveActorAbsolute/Delta(known actor)')
           PY
       - name: Exercise public Typed Packet API against fresh real BDS
         shell: bash
