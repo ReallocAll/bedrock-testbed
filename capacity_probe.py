@@ -209,13 +209,32 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
         nonlocal phase
         phase = label
         beginning = process_usage(os.getpid())
-        inputs_before = {bot: bot.capture_statistics().play_packet_counts_out[144] for bot in bots}
+        inputs_before = {}
+        inbound_counts_before = {}
+        inbound_batch_bytes_before = {}
+        for bot in bots:
+            statistics = bot.capture_statistics()
+            inputs_before[bot] = statistics.play_packet_counts_out[144]
+            inbound_counts_before[bot] = [int(value) for value in statistics.play_packet_counts_in]
+            inbound_batch_bytes_before[bot] = int(statistics.batch_bytes_in)
         begin = time.monotonic()
         await asyncio.sleep(seconds)
         elapsed = time.monotonic() - begin
         ending = process_usage(os.getpid())
-        inputs = {names[i]: bot.capture_statistics().play_packet_counts_out[144] - inputs_before[bot]
-                  for i, bot in enumerate(bots)}
+        inputs = {}
+        inbound_packet_counts = defaultdict(int)
+        inbound_batch_bytes = 0
+        for i, bot in enumerate(bots):
+            statistics = bot.capture_statistics()
+            inputs[names[i]] = statistics.play_packet_counts_out[144] - inputs_before[bot]
+            inbound_counts_after = [int(value) for value in statistics.play_packet_counts_in]
+            for packet_id in range(max(len(inbound_counts_before[bot]), len(inbound_counts_after))):
+                before = inbound_counts_before[bot][packet_id] if packet_id < len(inbound_counts_before[bot]) else 0
+                after = inbound_counts_after[packet_id] if packet_id < len(inbound_counts_after) else 0
+                delta = after - before
+                if delta > 0:
+                    inbound_packet_counts[str(packet_id)] += delta
+            inbound_batch_bytes += int(statistics.batch_bytes_in) - inbound_batch_bytes_before[bot]
         lateness = [value for bot in bots for value in ticks[label][bot]]
         executed = len(lateness)
         expected = elapsed * 20 * len(bots)
@@ -234,6 +253,9 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             "client_rss_kib_end": ending["rss_kib"] if ending else None,
             "input_packets_per_bot": inputs,
             "input_packets_per_second": round(sum(inputs.values()) / elapsed, 3),
+            "inbound_packet_counts_by_id": dict(inbound_packet_counts),
+            "inbound_gameplay_packets": sum(inbound_packet_counts.values()),
+            "inbound_batch_bytes": inbound_batch_bytes,
             "tasks_end": len(asyncio.all_tasks()),
         }
         report["phases"][label] = data
@@ -302,7 +324,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 profile_process = subprocess.Popen(
                     [
                         sys.executable, str(Path(__file__).with_name("capacity_thread_cpu.py")),
-                        "--pid", str(os.getpid()), "--duration", "205",
+                        "--pid", str(os.getpid()), "--duration", "330",
                         "--interval", "1", "--signal-seconds", "12,47,82,117,170,190",
                         "--output", str(ROOT / "work" / "capacity_thread_cpu.csv"),
                     ],
@@ -316,7 +338,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                     "sampler_pid": None,
                     "exit_code": None,
                     "independent_process": True,
-                    "duration_limit_s": 205,
+                    "duration_limit_s": 330,
                     "interval_s": 1,
                     "raw_csv": "capacity_server_thread_cpu.csv",
                     "thread_map": "capacity_server_thread_map.json",
@@ -326,7 +348,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 server_profile_process = subprocess.Popen(
                     [
                         sys.executable, str(Path(__file__).with_name("capacity_thread_cpu.py")),
-                        "--pgid", str(server_pgid), "--duration", "205", "--interval", "1",
+                        "--pgid", str(server_pgid), "--duration", "330", "--interval", "1",
                         "--output", str(ROOT / "work" / "capacity_server_thread_cpu.csv"),
                         "--thread-map", str(ROOT / "work" / "capacity_server_thread_map.json"),
                     ],
@@ -381,7 +403,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 "sampler_pid": profile_process.pid,
                 "exit_code": profile_process.returncode,
                 "independent_process": True,
-                "duration_limit_s": 205,
+                "duration_limit_s": 330,
                 "signal_seconds": [12, 47, 82, 117, 170, 190],
                 "thread_map": "capacity_thread_map.json",
                 "python_stacks": "capacity_thread_stacks.log",
@@ -415,8 +437,8 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             delta_samples = {label: set() for label in required_server_phases}
             positive_cpu_samples = {label: set() for label in required_server_phases}
             positive_cpu_pids = {label: set() for label in required_server_phases}
-            active_child_cpu_samples = {label: set() for label in required_server_phases}
-            active_child_pids = {label: set() for label in required_server_phases}
+            bds_cpu_samples = {label: set() for label in required_server_phases}
+            bds_pids = {label: set() for label in required_server_phases}
             observed_pids = set()
             process_identities = {}
             delta_rows = 0
@@ -459,9 +481,10 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                                 if delta_sched_cpu_ns > 0:
                                     positive_cpu_samples[label].add(sample)
                                     positive_cpu_pids[label].add(pid)
-                                    if pid != server_profile_report["target_pgid"]:
-                                        active_child_cpu_samples[label].add(sample)
-                                        active_child_pids[label].add(pid)
+                                    if (pid != server_profile_report["target_pgid"]
+                                            and row.get("exe_basename") == "bedrock_server"):
+                                        bds_cpu_samples[label].add(sample)
+                                        bds_pids[label].add(pid)
                                 break
             except (OSError, csv.Error):
                 sample_rows = 0
@@ -469,8 +492,8 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 delta_samples = {label: set() for label in required_server_phases}
                 positive_cpu_samples = {label: set() for label in required_server_phases}
                 positive_cpu_pids = {label: set() for label in required_server_phases}
-                active_child_cpu_samples = {label: set() for label in required_server_phases}
-                active_child_pids = {label: set() for label in required_server_phases}
+                bds_cpu_samples = {label: set() for label in required_server_phases}
+                bds_pids = {label: set() for label in required_server_phases}
                 observed_pids = set()
                 process_identities = {}
             server_profile_report["sample_rows"] = sample_rows
@@ -488,13 +511,13 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             server_profile_report["positive_cpu_pids_by_phase"] = {
                 label: sorted(positive_cpu_pids[label]) for label in required_server_phases
             }
-            server_profile_report["active_child_cpu_samples_by_phase"] = {
-                label: len(active_child_cpu_samples[label]) for label in required_server_phases
+            server_profile_report["bds_cpu_samples_by_phase"] = {
+                label: len(bds_cpu_samples[label]) for label in required_server_phases
             }
-            server_profile_report["active_child_pids_by_phase"] = {
-                label: sorted(active_child_pids[label]) for label in required_server_phases
+            server_profile_report["bds_pids_by_phase"] = {
+                label: sorted(bds_pids[label]) for label in required_server_phases
             }
-            missing_phases = [label for label in required_server_phases if not active_child_cpu_samples[label]]
+            missing_phases = [label for label in required_server_phases if not bds_cpu_samples[label]]
             server_profile_report["valid"] = (
                 server_profile_report["exit_code"] == 0
                 and not missing_phases
@@ -504,7 +527,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 message = (
                     "BDS thread CPU sampler invalid: "
                     f"exit_code={server_profile_report['exit_code']}, "
-                    f"active_child_cpu_samples={server_profile_report['active_child_cpu_samples_by_phase']}, "
+                    f"bds_cpu_samples={server_profile_report['bds_cpu_samples_by_phase']}, "
                     f"missing_phases={missing_phases}"
                 )
                 report["status"] = "FAIL"

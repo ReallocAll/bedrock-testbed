@@ -103,11 +103,18 @@ def main():
     parser.add_argument("--thread-map", type=Path)
     args = parser.parse_args()
     target_id = args.pid if args.pid is not None else args.pgid
-    if target_id <= 0 or not 0 < args.duration <= 240 or not 0 < args.interval <= 5:
+    if target_id <= 0 or not 0 < args.duration <= 360 or not 0 < args.interval <= 5:
         parser.error("invalid pid, duration, or interval")
     if args.pgid is not None and args.signal_seconds:
         parser.error("--signal-seconds is only supported with --pid")
     signals = sorted(float(x) for x in args.signal_seconds.split(",") if x)
+    stop_requested = False
+
+    def request_stop(_signum, _frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    signal.signal(signal.SIGTERM, request_stop)
     tick_rate = os.sysconf("SC_CLK_TCK")
     started = time.monotonic()
     previous = {}
@@ -141,6 +148,8 @@ def main():
         sample_index = 0
         sample_rows = 0
         while True:
+            if stop_requested:
+                break
             deadline = started + sample_index * args.interval
             delay = deadline - time.monotonic()
             if delay > 0:
@@ -216,7 +225,9 @@ def main():
             stream.flush()
             previous, previous_at = next_previous, captured
             sample_index += 1
-    if args.thread_map is not None and sample_rows == 0:
+            if stop_requested:
+                break
+    if args.thread_map is not None and sample_rows == 0 and not stop_requested:
         raise SystemExit("no thread sample rows were written")
 
 
