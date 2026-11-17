@@ -103,6 +103,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             "cpu_stat_initial": cgroup_throttle(),
         },
         "phases": {},
+        "acceptance_failures": [],
     }
     ticks = defaultdict(lambda: defaultdict(list))
     samples = []
@@ -170,19 +171,22 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             "tasks_end": ending["tasks"],
         }
         report["phases"][label] = data
-        # Readiness alone is not capacity acceptance: require usable 20 Hz timing.
+        # Record capacity failures without cutting off subsequent diagnostic stages.
+        # Connection/process failures still terminate the run as before.
         if data["input_packets_per_second"] < 0.8 * expected / elapsed:
-            raise AssertionError(
+            report["acceptance_failures"].append(
                 f"{label} PlayerAuthInput under-rate: "
                 f"{data['input_packets_per_second']} vs expected {expected / elapsed:.1f}/s"
             )
         if data["tick_missing_fraction_approx"] > 0.1 or (data["lateness_us_p99"] or 0) > 100_000:
-            raise AssertionError(
+            report["acceptance_failures"].append(
                 f"{label} tick degradation: missing={data['tick_missing_fraction_approx']}, "
                 f"p99_us={data['lateness_us_p99']}"
             )
         if not all(number > 0 for number in inputs.values()):
-            raise AssertionError(f"some bots sent no PlayerAuthInput in {label}: {inputs}")
+            report["acceptance_failures"].append(
+                f"some bots sent no PlayerAuthInput in {label}: {inputs}"
+            )
 
     sample_task = asyncio.create_task(sampler(), name="capacity-sampler")
     profile_process = None
@@ -225,6 +229,8 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             assert all(bot.get_status().state == BotState.ready for bot in bots)
             phase = "teardown"
         report["players_after_close"] = await asyncio.to_thread(check_players, server, names, 0)
+        if report["acceptance_failures"]:
+            raise AssertionError("capacity acceptance failed: " + "; ".join(report["acceptance_failures"]))
         report["status"] = "PASS"
         results["checks"].append(f"{count}_bots_ready_input_and_cleanup")
     except BaseException as error:
