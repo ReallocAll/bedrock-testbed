@@ -44,16 +44,113 @@ def patch_reader_yield():
     production_count = source.count(production_anchor)
     conditional_count = source.count(conditional_anchor)
     if conditional_count == 1 and baseline_count == 0 and production_count == 0:
-        return session_path
-    if baseline_count == 1 and production_count == 0 and conditional_count == 0:
+        updated = source
+    elif baseline_count == 1 and production_count == 0 and conditional_count == 0:
         updated = source.replace(baseline_anchor, baseline_anchor.replace(method, conditional_yield + method), 1)
     elif production_count == 1 and baseline_count == 0 and conditional_count == 0:
         updated = source.replace(production_anchor, "\n" + conditional_yield + method, 1)
     else:
         raise RuntimeError(f"Pinned Session.reader patch anchor is not unique: {session_path}")
-    compile(updated, str(session_path), "exec")
-    session_path.write_text(updated)
-    return session_path
+    # The timing probe is applied only to the installed Testbed venv copy.
+    # Keep every source anchor exact and unique so dependency drift fails closed.
+    reader_anchors = {
+        "recv": "            data = await self.connection.recv()\n",
+        "batch_decode": (
+            "                batch = self.batch.decode(\n"
+            "                    data,\n"
+            "                    packet_ids=None if self.options.validate_all_packets else REQUIRED_IDS,\n"
+            "                    recover_packet_errors=self.options.recover_packet_errors,\n"
+            "                )\n"
+        ),
+        "packet_next": "                decoded = next(decoded_packets)\n",
+        "handler": "                    await self.handle(decoded.payload)\n",
+    }
+    timing_marker = "_capacity_probe_rows = []\n"
+    if timing_marker not in source:
+        for name, anchor in reader_anchors.items():
+            if source.count(anchor) != 1:
+                raise RuntimeError(f"Pinned Session.{name} timing anchor is not unique: {session_path}")
+        source = updated
+        source = source.replace(
+            reader_anchors["recv"],
+            "            _capacity_batch_number = getattr(self, '_capacity_batch_number', 0) + 1\n"
+            "            self._capacity_batch_number = _capacity_batch_number\n"
+            "            _capacity_batch_sample = _capacity_batch_number % 64 == 0\n"
+            "            _capacity_recv_start = time.perf_counter_ns() if _capacity_batch_sample else 0\n"
+            "            data = await self.connection.recv()\n"
+            "            if _capacity_batch_sample:\n"
+            "                _capacity_probe_record('recv', None, (time.perf_counter_ns() - _capacity_recv_start) / 1000, len(data), None)\n"
+            "            _capacity_batch_start = time.perf_counter_ns() if _capacity_batch_sample else 0\n",
+            1,
+        )
+        source = source.replace(
+            reader_anchors["batch_decode"],
+            "                _capacity_decode_start = time.perf_counter_ns() if _capacity_batch_sample else 0\n"
+            + reader_anchors["batch_decode"]
+            + "                if _capacity_batch_sample:\n"
+            "                    _capacity_probe_record('batch_decode', None, (time.perf_counter_ns() - _capacity_decode_start) / 1000, len(data), batch.packet_count)\n",
+            1,
+        )
+        source = source.replace(
+            reader_anchors["packet_next"],
+            "                _capacity_packet_id = header.packet_id\n"
+            "                _capacity_packet_sample = False\n"
+            "                if _capacity_packet_id in (18, 19, 111):\n"
+            "                    _capacity_packet_count = getattr(self, '_capacity_packet_samples', None)\n"
+            "                    if _capacity_packet_count is None:\n"
+            "                        _capacity_packet_count = self._capacity_packet_samples = {}\n"
+            "                    _capacity_packet_count[_capacity_packet_id] = _capacity_packet_count.get(_capacity_packet_id, 0) + 1\n"
+            "                    _capacity_packet_sample = _capacity_packet_count[_capacity_packet_id] % 256 == 0\n"
+            "                _capacity_next_start = time.perf_counter_ns() if _capacity_packet_sample else 0\n"
+            + reader_anchors["packet_next"]
+            + "                if _capacity_packet_sample:\n"
+            "                    _capacity_probe_record('packet_decode', _capacity_packet_id, (time.perf_counter_ns() - _capacity_next_start) / 1000, len(data), batch.packet_count)\n",
+            1,
+        )
+        source = source.replace(
+            reader_anchors["handler"],
+            "                    _capacity_handler_start = time.perf_counter_ns() if _capacity_packet_sample else 0\n"
+            + reader_anchors["handler"]
+            + "                    if _capacity_packet_sample:\n"
+            "                        _capacity_probe_record('handler', _capacity_packet_id, (time.perf_counter_ns() - _capacity_handler_start) / 1000, len(data), batch.packet_count)\n",
+            1,
+        )
+        yield_anchor = "            if getattr(Session, \"_capacity_reader_yield\", False):\n"
+        if source.count(yield_anchor) != 1:
+            raise RuntimeError(f"Pinned Session batch-end timing anchor is not unique: {session_path}")
+        source = source.replace(
+            yield_anchor,
+            "            if _capacity_batch_sample:\n"
+            "                _capacity_probe_record('batch_total', None, (time.perf_counter_ns() - _capacity_batch_start) / 1000, len(data), batch.packet_count)\n"
+            + yield_anchor,
+            1,
+        )
+        marker = "class Session:\n"
+        if source.count(marker) != 1:
+            raise RuntimeError(f"Pinned Session class anchor is not unique: {session_path}")
+        helper = (
+            "_capacity_probe_phase = 'join'\n"
+            "_capacity_probe_rows = []\n"
+            "_capacity_probe_serial = 0\n\n"
+            "def _capacity_probe_record(point, packet_id, duration_us, batch_bytes, batch_packet_count):\n"
+            "    global _capacity_probe_serial\n"
+            "    _capacity_probe_serial += 1\n"
+            "    _capacity_probe_rows.append((_capacity_probe_phase, point, packet_id, _capacity_probe_serial, duration_us, batch_bytes, batch_packet_count))\n\n\n"
+        )
+        source = source.replace(marker, helper + marker, 1)
+    elif source.count(timing_marker) != 1:
+        raise RuntimeError(f"Pinned Session timing helper anchor is not unique: {session_path}")
+    compile(source, str(session_path), "exec")
+    if source != updated:
+        session_path.write_text(source)
+    import importlib
+
+    session_module = importlib.import_module("endpilot.session")
+    if not hasattr(session_module, "_capacity_probe_rows"):
+        session_module._capacity_probe_phase = "join"
+        session_module._capacity_probe_rows = []
+        session_module._capacity_probe_serial = 0
+    return session_module, session_module._capacity_probe_rows
 
 
 def install_mailbox_tracking():
@@ -157,8 +254,9 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
     """Measure 10+ independent sessions in one Runtime and isolate the client process."""
     if not 1 <= count <= 100:
         raise ValueError("capacity count must be 1..100")
+    reader_timing = None
     if count == 50 and transport == "raknet":
-        patch_reader_yield()
+        reader_timing, _ = patch_reader_yield()
     from endpilot import BotOptions, BotState, EventKind, Input, Runtime, event_mask
     from endpilot.session import Session
     Session._capacity_reader_yield = False
@@ -208,6 +306,8 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
     async def stage(label, bots, seconds=60):
         nonlocal phase
         phase = label
+        if reader_timing is not None:
+            reader_timing._capacity_probe_phase = label
         beginning = process_usage(os.getpid())
         inputs_before = {}
         inbound_counts_before = {}
@@ -306,6 +406,8 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             report["ready_seconds"] = round(time.monotonic() - started, 3)
             report["players_joined"] = await asyncio.to_thread(check_players, server, names, count)
             phase = "warmup"
+            if reader_timing is not None:
+                reader_timing._capacity_probe_phase = phase
             await asyncio.sleep(20)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
             if count == 50 and transport == "raknet":
@@ -366,6 +468,8 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             await stage("active", bots)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
             phase = "teardown"
+            if reader_timing is not None:
+                reader_timing._capacity_probe_phase = phase
         report["players_after_close"] = await asyncio.to_thread(check_players, server, names, 0)
         if report["acceptance_failures"]:
             raise AssertionError("capacity acceptance failed: " + "; ".join(report["acceptance_failures"]))
@@ -556,6 +660,12 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                                  "total_python_call_duration_us_including_native_receive_gil_reacquisition_and_scheduling",
                                  "returned_packet"))
                 writer.writerows(receive_rows)
+        if reader_timing is not None and reader_timing._capacity_probe_rows:
+            with (work / "capacity_reader_timing.csv").open("w", newline="") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(("phase", "point", "packet_id", "sample_no", "duration_us",
+                                 "batch_bytes", "batch_packet_count"))
+                writer.writerows(reader_timing._capacity_probe_rows)
         results["capacity"] = {key: value for key, value in report.items() if key != "environment"}
     if server_sampler_invalid:
         raise RuntimeError(report["error"])
