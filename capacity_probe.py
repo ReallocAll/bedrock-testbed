@@ -227,6 +227,33 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             assert all(bot.get_status().state == BotState.ready for bot in bots)
             await stage("active", bots)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
+            if count == 50 and transport == "raknet":
+                # Separate, bounded profiling stage: do not distort Idle/Active acceptance.
+                import cProfile
+                import io
+                import pstats
+
+                phase = "profiling"
+                profiler = cProfile.Profile()
+                profile_started = time.monotonic()
+                profiler.enable()
+                try:
+                    await asyncio.sleep(15)
+                finally:
+                    profiler.disable()
+                profiler.dump_stats(str(ROOT / "work" / "capacity_main.pstats"))
+                profile_text = io.StringIO()
+                stats = pstats.Stats(profiler, stream=profile_text)
+                stats.sort_stats("cumulative").print_stats(60)
+                stats.sort_stats("tottime").print_stats(60)
+                (ROOT / "work" / "capacity_main_profile.txt").write_text(profile_text.getvalue())
+                report["main_profile"] = {
+                    "tool": "stdlib cProfile",
+                    "duration_s": round(time.monotonic() - profile_started, 3),
+                    "separate_from_acceptance": True,
+                    "pstats": "capacity_main.pstats",
+                    "text": "capacity_main_profile.txt",
+                }
             phase = "teardown"
         report["players_after_close"] = await asyncio.to_thread(check_players, server, names, 0)
         if report["acceptance_failures"]:
