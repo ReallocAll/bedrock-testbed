@@ -86,6 +86,7 @@ def check_players(server: Server, names: list[str], expected: int) -> dict:
 async def exercise_capacity(server: Server, results: dict, transport: str, count: int) -> None:
     """Measure 10+ independent sessions in one Runtime and isolate the client process."""
     from endpilot import BotOptions, BotState, EventKind, Input, Runtime, event_mask
+    from endpilot.session import Session
 
     if not 1 <= count <= 100:
         raise ValueError("capacity count must be 1..100")
@@ -143,11 +144,13 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
         nonlocal phase
         phase = label
         beginning = resource_snapshot(server)
+        skipped_before = getattr(Session, "actor_ablation_skipped", None)
         inputs_before = {bot: bot.capture_statistics().play_packet_counts_out[144] for bot in bots}
         begin = time.monotonic()
         await asyncio.sleep(seconds)
         elapsed = time.monotonic() - begin
         ending = resource_snapshot(server)
+        skipped_after = getattr(Session, "actor_ablation_skipped", None)
         inputs = {names[i]: bot.capture_statistics().play_packet_counts_out[144] - inputs_before[bot]
                   for i, bot in enumerate(bots)}
         lateness = [value for bot in bots for value in ticks[label][bot]]
@@ -155,6 +158,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
         expected = elapsed * 20 * len(bots)
         data = {
             "duration_s": round(elapsed, 3),
+            "remote_actor_motion_skipped": skipped_after - skipped_before if skipped_before is not None else None,
             "tick_observed": executed,
             "tick_expected_approx": round(expected, 1),
             "tick_missing_fraction_approx": round(max(0, 1 - executed / expected), 5),
@@ -259,6 +263,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             profile_log.close()
         sample_task.cancel()
         await asyncio.gather(sample_task, return_exceptions=True)
+        report["remote_actor_motion_skipped_total"] = getattr(Session, "actor_ablation_skipped", None)
         report["environment"]["cpu_stat_final"] = cgroup_throttle()
         report["samples"] = len(samples)
         work = ROOT / "work"
