@@ -6,6 +6,8 @@ import csv
 import json
 import os
 import re
+import subprocess
+import sys
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -183,6 +185,8 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             raise AssertionError(f"some bots sent no PlayerAuthInput in {label}: {inputs}")
 
     sample_task = asyncio.create_task(sampler(), name="capacity-sampler")
+    profile_process = None
+    profile_log = None
     try:
         async with Runtime(observe, events=event_mask(EventKind.tick)) as runtime:
             bots = [
@@ -202,6 +206,19 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             phase = "warmup"
             await asyncio.sleep(20)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
+            if count == 50 and transport == "raknet":
+                # Independent process avoids depending on the measured event loop/GIL.
+                # Limit recording to the first 55 seconds of the 60-second idle stage.
+                profile_log = (ROOT / "work" / "capacity_thread_cpu.log").open("w")
+                profile_process = subprocess.Popen(
+                    [
+                        sys.executable, str(Path(__file__).with_name("capacity_thread_cpu.py")),
+                        "--pid", str(os.getpid()), "--duration", "55",
+                        "--interval", "1",
+                        "--output", str(ROOT / "work" / "capacity_thread_cpu.csv"),
+                    ],
+                    stdout=profile_log, stderr=subprocess.STDOUT,
+                )
             await stage("idle", bots)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
             await stage("active", bots)
@@ -215,6 +232,25 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
         report["error"] = f"{type(error).__name__}: {error}"
         raise
     finally:
+        if profile_process is not None:
+            if profile_process.poll() is None:
+                profile_process.terminate()
+                try:
+                    profile_process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    profile_process.kill()
+                    profile_process.wait()
+            report["thread_cpu_profile"] = {
+                "sampler_pid": profile_process.pid,
+                "exit_code": profile_process.returncode,
+                "independent_process": True,
+                "duration_limit_s": 55,
+                "interval_s": 1,
+                "raw_csv": "capacity_thread_cpu.csv",
+                "log": "capacity_thread_cpu.log",
+            }
+        if profile_log is not None:
+            profile_log.close()
         sample_task.cancel()
         await asyncio.gather(sample_task, return_exceptions=True)
         report["environment"]["cpu_stat_final"] = cgroup_throttle()

@@ -120,6 +120,8 @@ jobs:
             work/navigation_trajectory.json
             work/capacity.json
             work/capacity_samples.csv
+            work/capacity_thread_cpu.csv
+            work/capacity_thread_cpu.log
             work/bds.log
             work/server/version.txt
             work/server/server.properties
