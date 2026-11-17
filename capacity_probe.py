@@ -289,9 +289,9 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                     ],
                     stdout=profile_log, stderr=subprocess.STDOUT,
                 )
-                # Same-process ABAB; each setting applies at the end of a complete decoded batch.
-                for label, enabled in (("idle_a1", False), ("idle_b1", True),
-                                       ("idle_a2", False), ("idle_b2", True)):
+                # Same-process BABA; each setting applies at the end of a complete decoded batch.
+                for label, enabled in (("idle_b1", True), ("idle_a1", False),
+                                       ("idle_b2", True), ("idle_a2", False)):
                     Session._capacity_reader_yield = enabled
                     await stage(label, bots, seconds=35)
                 Session._capacity_reader_yield = False
