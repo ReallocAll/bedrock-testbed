@@ -23,7 +23,10 @@ def patch_reader_yield():
     """Patch only the pinned installed copy, preserving packet handling and ordering."""
     from importlib.metadata import distribution
 
-    session_path = Path(distribution("endpilot").locate_file("endpilot/session.py"))
+    install_root = Path(distribution("endpilot").locate_file("endpilot/session.py")).parent
+    session_path = install_root / "session.py"
+    actors_path = install_root / "_actors.py"
+    runtime_path = install_root / "runtime.py"
     source = session_path.read_text()
     conditional_yield = (
         '            if getattr(Session, "_capacity_reader_yield", False):\n'
@@ -182,16 +185,179 @@ def patch_reader_yield():
         source = source.replace(motion_branch, motion_branch_patched, 1)
     elif branch_counts != (0, 1, 0, 1):
         raise RuntimeError(f"Pinned Session.handle_state movement anchors are not unique: {session_path}")
+
+    timing_marker = "_capacity_actor_timing_patch_v1"
+    session_timing_anchor = "    def move_actor(self, actor, position, pitch, yaw, head):\n"
+    session_timing_patch = '''
+# _capacity_actor_timing_patch_v1: test-only sampled instrumentation.
+import time as _capacity_timing_clock
+from functools import wraps as _capacity_timing_wraps
+
+_capacity_timing_phase = "join"
+_capacity_timing_rows = []
+_capacity_timing_serial = 0
+_capacity_move_actor_samples = 0
+
+def _capacity_timing_record(stage, started_ns, event_kind=None):
+    global _capacity_timing_serial
+    _capacity_timing_serial += 1
+    _capacity_timing_rows.append((
+        _capacity_timing_phase, stage, event_kind, _capacity_timing_serial,
+        (_capacity_timing_clock.perf_counter_ns() - started_ns) / 1000,
+    ))
+
+_capacity_move_actor_original = Session.move_actor
+@_capacity_timing_wraps(_capacity_move_actor_original)
+def _capacity_timed_move_actor(self, actor, position, pitch, yaw, head):
+    global _capacity_move_actor_samples
+    _capacity_move_actor_samples += 1
+    if _capacity_move_actor_samples % 256:
+        return _capacity_move_actor_original(self, actor, position, pitch, yaw, head)
+    _started_ns = _capacity_timing_clock.perf_counter_ns()
+    try:
+        return _capacity_move_actor_original(self, actor, position, pitch, yaw, head)
+    finally:
+        _capacity_timing_record("session.move_actor", _started_ns)
+
+Session.move_actor = _capacity_timed_move_actor
+'''
+    if source.count(session_timing_anchor) != 1:
+        raise RuntimeError(f"Pinned Session.move_actor anchor is not unique: {session_path}")
+    if timing_marker not in source:
+        source += "\n" + session_timing_patch
+    elif source.count(timing_marker) != 1 or not source.endswith(session_timing_patch):
+        raise RuntimeError(f"Pinned Session timing patch marker is not unique: {session_path}")
+
+    actors_source = actors_path.read_text()
+    actors_timing_anchors = (
+        "class _ActorState:\n",
+        "    def move(self, actor, position, pitch, yaw, head):\n",
+        "    def motion(self, packet, protocol):\n",
+    )
+    if any(actors_source.count(anchor) != 1 for anchor in actors_timing_anchors):
+        raise RuntimeError(f"Pinned _ActorState timing anchors are not unique: {actors_path}")
+    actors_timing_marker = "_capacity_actor_timing_patch_v1"
+    actors_timing_patch = '''
+# _capacity_actor_timing_patch_v1: test-only sampled instrumentation.
+import time as _capacity_timing_clock
+from functools import wraps as _capacity_timing_wraps
+
+_capacity_timing_phase = "join"
+_capacity_timing_rows = []
+_capacity_timing_serial = 0
+_capacity_actor_move_samples = 0
+_capacity_actor_motion_samples = 0
+
+def _capacity_timing_record(stage, started_ns, event_kind=None):
+    global _capacity_timing_serial
+    _capacity_timing_serial += 1
+    _capacity_timing_rows.append((
+        _capacity_timing_phase, stage, event_kind, _capacity_timing_serial,
+        (_capacity_timing_clock.perf_counter_ns() - started_ns) / 1000,
+    ))
+
+_capacity_actor_move_original = _ActorState.move
+@_capacity_timing_wraps(_capacity_actor_move_original)
+def _capacity_timed_actor_move(self, actor, position, pitch, yaw, head):
+    global _capacity_actor_move_samples
+    _capacity_actor_move_samples += 1
+    if _capacity_actor_move_samples % 256:
+        return _capacity_actor_move_original(self, actor, position, pitch, yaw, head)
+    _started_ns = _capacity_timing_clock.perf_counter_ns()
+    try:
+        return _capacity_actor_move_original(self, actor, position, pitch, yaw, head)
+    finally:
+        _capacity_timing_record("actor_state.move", _started_ns)
+
+_capacity_actor_motion_original = _ActorState.motion
+@_capacity_timing_wraps(_capacity_actor_motion_original)
+def _capacity_timed_actor_motion(self, packet, protocol):
+    global _capacity_actor_motion_samples
+    if packet.packet_id != 111:
+        return _capacity_actor_motion_original(self, packet, protocol)
+    _capacity_actor_motion_samples += 1
+    if _capacity_actor_motion_samples % 256:
+        return _capacity_actor_motion_original(self, packet, protocol)
+    _started_ns = _capacity_timing_clock.perf_counter_ns()
+    try:
+        return _capacity_actor_motion_original(self, packet, protocol)
+    finally:
+        _capacity_timing_record("actor_state.motion_id111", _started_ns)
+
+_ActorState.move = _capacity_timed_actor_move
+_ActorState.motion = _capacity_timed_actor_motion
+'''
+    if actors_timing_marker not in actors_source:
+        actors_source += "\n" + actors_timing_patch
+    elif actors_source.count(actors_timing_marker) != 1 or not actors_source.endswith(actors_timing_patch):
+        raise RuntimeError(f"Pinned _ActorState timing patch marker is not unique: {actors_path}")
+
+    runtime_source = runtime_path.read_text()
+    runtime_timing_anchor = "    def _emit(self, bot, kind, make_event):\n"
+    if runtime_source.count(runtime_timing_anchor) != 1:
+        raise RuntimeError(f"Pinned Runtime._emit anchor is not unique: {runtime_path}")
+    runtime_timing_marker = "_capacity_actor_timing_patch_v1"
+    runtime_timing_patch = '''
+# _capacity_actor_timing_patch_v1: test-only sampled instrumentation.
+import time as _capacity_timing_clock
+from functools import wraps as _capacity_timing_wraps
+
+_capacity_timing_phase = "join"
+_capacity_timing_rows = []
+_capacity_timing_serial = 0
+_capacity_emit_samples = {"actor_motion": 0, "actor": 0}
+
+def _capacity_timing_record(stage, started_ns, event_kind=None):
+    global _capacity_timing_serial
+    _capacity_timing_serial += 1
+    _capacity_timing_rows.append((
+        _capacity_timing_phase, stage, event_kind, _capacity_timing_serial,
+        (_capacity_timing_clock.perf_counter_ns() - started_ns) / 1000,
+    ))
+
+_capacity_runtime_emit_original = Runtime._emit
+@_capacity_timing_wraps(_capacity_runtime_emit_original)
+def _capacity_timed_runtime_emit(self, bot, kind, make_event):
+    _event_kind = getattr(kind, "name", None)
+    if _event_kind not in _capacity_emit_samples:
+        return _capacity_runtime_emit_original(self, bot, kind, make_event)
+    _capacity_emit_samples[_event_kind] += 1
+    if _capacity_emit_samples[_event_kind] % 256:
+        return _capacity_runtime_emit_original(self, bot, kind, make_event)
+    _started_ns = _capacity_timing_clock.perf_counter_ns()
+    try:
+        return _capacity_runtime_emit_original(self, bot, kind, make_event)
+    finally:
+        _capacity_timing_record("runtime.emit", _started_ns, _event_kind)
+
+Runtime._emit = _capacity_timed_runtime_emit
+'''
+    if runtime_timing_marker not in runtime_source:
+        runtime_source += "\n" + runtime_timing_patch
+    elif runtime_source.count(runtime_timing_marker) != 1 or not runtime_source.endswith(runtime_timing_patch):
+        raise RuntimeError(f"Pinned Runtime timing patch marker is not unique: {runtime_path}")
+
+    for path, patched_source in (
+        (session_path, source), (actors_path, actors_source), (runtime_path, runtime_source),
+    ):
+        compile(patched_source, str(path), "exec")
     compile(source, str(session_path), "exec")
     if source != updated:
         session_path.write_text(source)
+    if actors_source != actors_path.read_text():
+        actors_path.write_text(actors_source)
+    if runtime_source != runtime_path.read_text():
+        runtime_path.write_text(runtime_source)
     import importlib
 
     session_module = importlib.import_module("endpilot.session")
+    actors_module = importlib.import_module("endpilot._actors")
+    runtime_module = importlib.import_module("endpilot.runtime")
     if not hasattr(session_module, "_capacity_probe_rows"):
         session_module._capacity_probe_phase = "join"
         session_module._capacity_probe_rows = []
         session_module._capacity_probe_serial = 0
+    session_module._capacity_actor_timing_modules = (session_module, actors_module, runtime_module)
     return session_module, session_module._capacity_probe_rows
 
 
@@ -299,6 +465,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
     reader_timing = None
     if count == 50 and transport == "raknet":
         reader_timing, _ = patch_reader_yield()
+    actor_timing_modules = reader_timing._capacity_actor_timing_modules if reader_timing is not None else ()
     from endpilot import BotOptions, BotState, EventKind, Input, Runtime, event_mask
     from endpilot.session import Session
     Session._capacity_reader_yield = False
@@ -363,6 +530,8 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
         phase = label
         if reader_timing is not None:
             reader_timing._capacity_probe_phase = label
+        for module in actor_timing_modules:
+            module._capacity_timing_phase = label
         beginning = process_usage(os.getpid())
         inputs_before = {}
         inbound_counts_before = {}
@@ -464,6 +633,8 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             phase = "warmup"
             if reader_timing is not None:
                 reader_timing._capacity_probe_phase = phase
+            for module in actor_timing_modules:
+                module._capacity_timing_phase = phase
             await asyncio.sleep(20)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
             if count == 50 and transport == "raknet":
@@ -529,6 +700,8 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             phase = "teardown"
             if reader_timing is not None:
                 reader_timing._capacity_probe_phase = phase
+            for module in actor_timing_modules:
+                module._capacity_timing_phase = phase
         report["players_after_close"] = await asyncio.to_thread(check_players, server, names, 0)
         if report["acceptance_failures"]:
             raise AssertionError("capacity acceptance failed: " + "; ".join(report["acceptance_failures"]))
@@ -726,6 +899,12 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                 writer.writerow(("phase", "point", "packet_id", "sample_no", "duration_us",
                                  "batch_bytes", "batch_packet_count"))
                 writer.writerows(reader_timing._capacity_probe_rows)
+        if actor_timing_modules:
+            with (work / "capacity_actor_timing.csv").open("w", newline="") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(("phase", "stage", "event_kind", "sample_no", "duration_us"))
+                for module in actor_timing_modules:
+                    writer.writerows(module._capacity_timing_rows)
         results["capacity"] = {key: value for key, value in report.items() if key != "environment"}
     if server_sampler_invalid:
         raise RuntimeError(report["error"])

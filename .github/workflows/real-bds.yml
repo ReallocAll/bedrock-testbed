@@ -122,6 +122,7 @@ jobs:
             work/capacity_probe_samples.csv
             work/capacity_rakpeer_receive.csv
             work/capacity_reader_timing.csv
+            work/capacity_actor_timing.csv
             work/capacity_thread_cpu.csv
             work/capacity_thread_cpu.log
             work/capacity_thread_map.json
