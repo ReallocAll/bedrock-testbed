@@ -17,6 +17,31 @@ from pathlib import Path
 
 from server import ROOT, PLAYER, PLAYER_COUNT, Server
 
+ACTOR_TIMING_CSV_FIELDS = (
+    "phase", "record_type", "packet_id", "actor_path", "packet_hit_count", "sample_no",
+    "handler_duration_us", "handler_exclusive_us",
+    "actor_state_motion_us", "actor_state_motion_calls", "actor_state_motion_hit",
+    "actor_state_move_us", "actor_state_move_calls",
+    "session_move_actor_us", "session_move_actor_calls", "move_actor_exclusive_us",
+    "runtime_wants_mask_direct_us", "runtime_wants_mask_direct_calls",
+    "runtime_wants_mask_emit_us", "runtime_wants_mask_emit_calls",
+    "runtime_wants_mask_us", "runtime_wants_mask_calls",
+    "runtime_emit_actor_motion_us", "runtime_emit_actor_motion_calls",
+    "runtime_emit_actor_us", "runtime_emit_actor_calls",
+)
+
+
+def _write_capacity_actor_timing_csv(stream, sample_rows, phase_hits):
+    writer = csv.DictWriter(stream, fieldnames=ACTOR_TIMING_CSV_FIELDS)
+    writer.writeheader()
+    writer.writerows(sample_rows)
+    for phase_name, counts in phase_hits.items():
+        for packet_id, hit_count in counts.items():
+            writer.writerow({
+                "phase": phase_name, "record_type": "phase_hits", "packet_id": packet_id,
+                "packet_hit_count": hit_count,
+            })
+
 
 
 def patch_reader_yield():
@@ -215,6 +240,7 @@ def _capacity_actor_timing_record(record):
     record["move_actor_exclusive_us"] = (
         move_actor_us - state_move_us - wants_mask_direct_us - emit_motion_us - emit_actor_us
     )
+    record.pop("runtime_emit_depth", None)
     _capacity_actor_timing_rows.append(record)
 
 _capacity_handle_state_original = Session.handle_state
@@ -979,27 +1005,9 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
         if actor_timing_modules:
             actor_timing_phase_hits.setdefault(phase, dict(reader_timing._capacity_actor_handler_hits))
             with (work / "capacity_actor_timing.csv").open("w", newline="") as fh:
-                fieldnames = (
-                    "phase", "record_type", "packet_id", "actor_path", "packet_hit_count", "sample_no",
-                    "handler_duration_us", "handler_exclusive_us",
-                    "actor_state_motion_us", "actor_state_motion_calls", "actor_state_motion_hit",
-                    "actor_state_move_us", "actor_state_move_calls",
-                    "session_move_actor_us", "session_move_actor_calls", "move_actor_exclusive_us",
-                    "runtime_wants_mask_direct_us", "runtime_wants_mask_direct_calls",
-                    "runtime_wants_mask_emit_us", "runtime_wants_mask_emit_calls",
-                    "runtime_wants_mask_us", "runtime_wants_mask_calls",
-                    "runtime_emit_actor_motion_us", "runtime_emit_actor_motion_calls",
-                    "runtime_emit_actor_us", "runtime_emit_actor_calls",
+                _write_capacity_actor_timing_csv(
+                    fh, reader_timing._capacity_actor_timing_rows, actor_timing_phase_hits
                 )
-                writer = csv.DictWriter(fh, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(reader_timing._capacity_actor_timing_rows)
-                for phase_name, counts in actor_timing_phase_hits.items():
-                    for packet_id, hit_count in counts.items():
-                        writer.writerow({
-                            "phase": phase_name, "record_type": "phase_hits", "packet_id": packet_id,
-                            "packet_hit_count": hit_count,
-                        })
         results["capacity"] = {key: value for key, value in report.items() if key != "environment"}
     if server_sampler_invalid:
         raise RuntimeError(report["error"])
