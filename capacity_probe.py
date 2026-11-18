@@ -188,36 +188,107 @@ def patch_reader_yield():
 
     timing_marker = "_capacity_actor_timing_patch_v1"
     session_timing_anchor = "    def move_actor(self, actor, position, pitch, yaw, head):\n"
+    session_handler_anchor = "    def handle_state(self, packet):\n"
+    if source.count(session_handler_anchor) != 1:
+        raise RuntimeError(f"Pinned Session.handle_state timing anchor is not unique: {session_path}")
     session_timing_patch = '''
 # _capacity_actor_timing_patch_v1: test-only sampled instrumentation.
+from contextvars import ContextVar as _CapacityContextVar
 import time as _capacity_timing_clock
 from functools import wraps as _capacity_timing_wraps
 
 _capacity_timing_phase = "join"
-_capacity_timing_rows = []
-_capacity_timing_serial = 0
-_capacity_move_actor_samples = 0
+_capacity_actor_timing_rows = []
+_capacity_actor_timing_context = _CapacityContextVar("capacity_actor_timing_context", default=None)
+_capacity_actor_handler_hits = {18: 0, 19: 0, 111: 0}
 
-def _capacity_timing_record(stage, started_ns, event_kind=None):
-    global _capacity_timing_serial
-    _capacity_timing_serial += 1
-    _capacity_timing_rows.append((
-        _capacity_timing_phase, stage, event_kind, _capacity_timing_serial,
-        (_capacity_timing_clock.perf_counter_ns() - started_ns) / 1000,
-    ))
+def _capacity_actor_timing_record(record):
+    parent_us = record["handler_duration_us"]
+    motion_us = record["actor_state_motion_us"]
+    move_actor_us = record["session_move_actor_us"]
+    state_move_us = record["actor_state_move_us"]
+    wants_mask_direct_us = record["runtime_wants_mask_direct_us"]
+    wants_mask_us = record["runtime_wants_mask_us"]
+    emit_motion_us = record["runtime_emit_actor_motion_us"]
+    emit_actor_us = record["runtime_emit_actor_us"]
+    record["handler_exclusive_us"] = parent_us - motion_us - move_actor_us
+    record["move_actor_exclusive_us"] = (
+        move_actor_us - state_move_us - wants_mask_direct_us - emit_motion_us - emit_actor_us
+    )
+    _capacity_actor_timing_rows.append(record)
+
+_capacity_handle_state_original = Session.handle_state
+@_capacity_timing_wraps(_capacity_handle_state_original)
+def _capacity_timed_handle_state(self, packet):
+    _packet_id = packet.packet_id
+    if _packet_id not in _capacity_actor_handler_hits:
+        return _capacity_handle_state_original(self, packet)
+    _capacity_actor_handler_hits[_packet_id] += 1
+    _hit_count = _capacity_actor_handler_hits[_packet_id]
+    if _hit_count % 256:
+        return _capacity_handle_state_original(self, packet)
+    if _packet_id == 19:
+        if not self.negotiation.start_game:
+            _actor_path = "pre_start"
+        elif packet.player_id == self.status.actor_runtime_id:
+            _actor_path = "local_player"
+        else:
+            _actor_path = "remote_player_candidate"
+    else:
+        _runtime_id = packet.move_data.runtime_id
+        _actor_path = "local_actor_candidate" if _runtime_id == self.status.actor_runtime_id else "remote_actor_candidate"
+    _record = {
+        "phase": _capacity_timing_phase,
+        "record_type": "sample",
+        "packet_id": _packet_id,
+        "actor_path": _actor_path,
+        "packet_hit_count": _hit_count,
+        "sample_no": _hit_count // 256,
+        "handler_duration_us": 0.0,
+        "actor_state_motion_us": 0.0,
+        "actor_state_motion_calls": 0,
+        "actor_state_motion_hit": False,
+        "actor_state_move_us": 0.0,
+        "actor_state_move_calls": 0,
+        "session_move_actor_us": 0.0,
+        "session_move_actor_calls": 0,
+        "runtime_wants_mask_us": 0.0,
+        "runtime_wants_mask_calls": 0,
+        "runtime_wants_mask_direct_us": 0.0,
+        "runtime_wants_mask_direct_calls": 0,
+        "runtime_wants_mask_emit_us": 0.0,
+        "runtime_wants_mask_emit_calls": 0,
+        "runtime_emit_depth": 0,
+        "runtime_emit_actor_motion_us": 0.0,
+        "runtime_emit_actor_motion_calls": 0,
+        "runtime_emit_actor_us": 0.0,
+        "runtime_emit_actor_calls": 0,
+        "handler_exclusive_us": 0.0,
+        "move_actor_exclusive_us": 0.0,
+    }
+    _token = _capacity_actor_timing_context.set(_record)
+    _started_ns = _capacity_timing_clock.perf_counter_ns()
+    try:
+        return _capacity_handle_state_original(self, packet)
+    finally:
+        _record["handler_duration_us"] = (_capacity_timing_clock.perf_counter_ns() - _started_ns) / 1000
+        _capacity_actor_timing_context.reset(_token)
+        _capacity_actor_timing_record(_record)
+
+Session.handle_state = _capacity_timed_handle_state
 
 _capacity_move_actor_original = Session.move_actor
 @_capacity_timing_wraps(_capacity_move_actor_original)
 def _capacity_timed_move_actor(self, actor, position, pitch, yaw, head):
-    global _capacity_move_actor_samples
-    _capacity_move_actor_samples += 1
-    if _capacity_move_actor_samples % 256:
+    _record = _capacity_actor_timing_context.get()
+    if _record is None:
         return _capacity_move_actor_original(self, actor, position, pitch, yaw, head)
     _started_ns = _capacity_timing_clock.perf_counter_ns()
+    _record["session_move_actor_calls"] += 1
     try:
         return _capacity_move_actor_original(self, actor, position, pitch, yaw, head)
     finally:
-        _capacity_timing_record("session.move_actor", _started_ns)
+        _record["session_move_actor_us"] += (_capacity_timing_clock.perf_counter_ns() - _started_ns) / 1000
 
 Session.move_actor = _capacity_timed_move_actor
 '''
@@ -242,47 +313,35 @@ Session.move_actor = _capacity_timed_move_actor
 import time as _capacity_timing_clock
 from functools import wraps as _capacity_timing_wraps
 
-_capacity_timing_phase = "join"
-_capacity_timing_rows = []
-_capacity_timing_serial = 0
-_capacity_actor_move_samples = 0
-_capacity_actor_motion_samples = 0
-
-def _capacity_timing_record(stage, started_ns, event_kind=None):
-    global _capacity_timing_serial
-    _capacity_timing_serial += 1
-    _capacity_timing_rows.append((
-        _capacity_timing_phase, stage, event_kind, _capacity_timing_serial,
-        (_capacity_timing_clock.perf_counter_ns() - started_ns) / 1000,
-    ))
+_capacity_actor_timing_context = None
 
 _capacity_actor_move_original = _ActorState.move
 @_capacity_timing_wraps(_capacity_actor_move_original)
 def _capacity_timed_actor_move(self, actor, position, pitch, yaw, head):
-    global _capacity_actor_move_samples
-    _capacity_actor_move_samples += 1
-    if _capacity_actor_move_samples % 256:
+    _record = _capacity_actor_timing_context.get() if _capacity_actor_timing_context is not None else None
+    if _record is None:
         return _capacity_actor_move_original(self, actor, position, pitch, yaw, head)
     _started_ns = _capacity_timing_clock.perf_counter_ns()
+    _record["actor_state_move_calls"] += 1
     try:
         return _capacity_actor_move_original(self, actor, position, pitch, yaw, head)
     finally:
-        _capacity_timing_record("actor_state.move", _started_ns)
+        _record["actor_state_move_us"] += (_capacity_timing_clock.perf_counter_ns() - _started_ns) / 1000
 
 _capacity_actor_motion_original = _ActorState.motion
 @_capacity_timing_wraps(_capacity_actor_motion_original)
 def _capacity_timed_actor_motion(self, packet, protocol):
-    global _capacity_actor_motion_samples
-    if packet.packet_id != 111:
-        return _capacity_actor_motion_original(self, packet, protocol)
-    _capacity_actor_motion_samples += 1
-    if _capacity_actor_motion_samples % 256:
+    _record = _capacity_actor_timing_context.get() if _capacity_actor_timing_context is not None else None
+    if _record is None or packet.packet_id != _record["packet_id"]:
         return _capacity_actor_motion_original(self, packet, protocol)
     _started_ns = _capacity_timing_clock.perf_counter_ns()
+    _record["actor_state_motion_calls"] += 1
     try:
-        return _capacity_actor_motion_original(self, packet, protocol)
+        _result = _capacity_actor_motion_original(self, packet, protocol)
+        _record["actor_state_motion_hit"] = _result is not None
+        return _result
     finally:
-        _capacity_timing_record("actor_state.motion_id111", _started_ns)
+        _record["actor_state_motion_us"] += (_capacity_timing_clock.perf_counter_ns() - _started_ns) / 1000
 
 _ActorState.move = _capacity_timed_actor_move
 _ActorState.motion = _capacity_timed_actor_motion
@@ -293,7 +352,10 @@ _ActorState.motion = _capacity_timed_actor_motion
         raise RuntimeError(f"Pinned _ActorState timing patch marker is not unique: {actors_path}")
 
     runtime_source = runtime_path.read_text()
+    runtime_wants_mask_anchor = "    def _wants_mask(self, bot, mask) -> bool:\n"
     runtime_timing_anchor = "    def _emit(self, bot, kind, make_event):\n"
+    if runtime_source.count(runtime_wants_mask_anchor) != 1:
+        raise RuntimeError(f"Pinned Runtime._wants_mask anchor is not unique: {runtime_path}")
     if runtime_source.count(runtime_timing_anchor) != 1:
         raise RuntimeError(f"Pinned Runtime._emit anchor is not unique: {runtime_path}")
     runtime_timing_marker = "_capacity_actor_timing_patch_v1"
@@ -302,33 +364,46 @@ _ActorState.motion = _capacity_timed_actor_motion
 import time as _capacity_timing_clock
 from functools import wraps as _capacity_timing_wraps
 
-_capacity_timing_phase = "join"
-_capacity_timing_rows = []
-_capacity_timing_serial = 0
-_capacity_emit_samples = {"actor_motion": 0, "actor": 0}
+_capacity_actor_timing_context = None
 
-def _capacity_timing_record(stage, started_ns, event_kind=None):
-    global _capacity_timing_serial
-    _capacity_timing_serial += 1
-    _capacity_timing_rows.append((
-        _capacity_timing_phase, stage, event_kind, _capacity_timing_serial,
-        (_capacity_timing_clock.perf_counter_ns() - started_ns) / 1000,
-    ))
+_capacity_runtime_wants_mask_original = Runtime._wants_mask
+@_capacity_timing_wraps(_capacity_runtime_wants_mask_original)
+def _capacity_timed_runtime_wants_mask(self, bot, mask):
+    _record = _capacity_actor_timing_context.get() if _capacity_actor_timing_context is not None else None
+    if _record is None:
+        return _capacity_runtime_wants_mask_original(self, bot, mask)
+    _started_ns = _capacity_timing_clock.perf_counter_ns()
+    _record["runtime_wants_mask_calls"] += 1
+    if _record["runtime_emit_depth"]:
+        _record["runtime_wants_mask_emit_calls"] += 1
+        _wants_mask_field = "runtime_wants_mask_emit_us"
+    else:
+        _record["runtime_wants_mask_direct_calls"] += 1
+        _wants_mask_field = "runtime_wants_mask_direct_us"
+    try:
+        return _capacity_runtime_wants_mask_original(self, bot, mask)
+    finally:
+        _elapsed_us = (_capacity_timing_clock.perf_counter_ns() - _started_ns) / 1000
+        _record["runtime_wants_mask_us"] += _elapsed_us
+        _record[_wants_mask_field] += _elapsed_us
+
+Runtime._wants_mask = _capacity_timed_runtime_wants_mask
 
 _capacity_runtime_emit_original = Runtime._emit
 @_capacity_timing_wraps(_capacity_runtime_emit_original)
 def _capacity_timed_runtime_emit(self, bot, kind, make_event):
+    _record = _capacity_actor_timing_context.get() if _capacity_actor_timing_context is not None else None
     _event_kind = getattr(kind, "name", None)
-    if _event_kind not in _capacity_emit_samples:
-        return _capacity_runtime_emit_original(self, bot, kind, make_event)
-    _capacity_emit_samples[_event_kind] += 1
-    if _capacity_emit_samples[_event_kind] % 256:
+    if _record is None or _event_kind not in ("actor_motion", "actor"):
         return _capacity_runtime_emit_original(self, bot, kind, make_event)
     _started_ns = _capacity_timing_clock.perf_counter_ns()
+    _record[f"runtime_emit_{_event_kind}_calls"] += 1
+    _record["runtime_emit_depth"] += 1
     try:
         return _capacity_runtime_emit_original(self, bot, kind, make_event)
     finally:
-        _capacity_timing_record("runtime.emit", _started_ns, _event_kind)
+        _record[f"runtime_emit_{_event_kind}_us"] += (_capacity_timing_clock.perf_counter_ns() - _started_ns) / 1000
+        _record["runtime_emit_depth"] -= 1
 
 Runtime._emit = _capacity_timed_runtime_emit
 '''
@@ -357,6 +432,8 @@ Runtime._emit = _capacity_timed_runtime_emit
         session_module._capacity_probe_phase = "join"
         session_module._capacity_probe_rows = []
         session_module._capacity_probe_serial = 0
+    actors_module._capacity_actor_timing_context = session_module._capacity_actor_timing_context
+    runtime_module._capacity_actor_timing_context = session_module._capacity_actor_timing_context
     session_module._capacity_actor_timing_modules = (session_module, actors_module, runtime_module)
     return session_module, session_module._capacity_probe_rows
 
@@ -499,7 +576,20 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
     ticks = defaultdict(lambda: defaultdict(list))
     probe_samples = []
     phase = "join"
+    actor_timing_phase_hits = {}
     started = time.monotonic()
+
+    def set_phase(label):
+        nonlocal phase
+        if label == phase:
+            return
+        if reader_timing is not None:
+            actor_timing_phase_hits[phase] = dict(reader_timing._capacity_actor_handler_hits)
+            reader_timing._capacity_actor_handler_hits = {18: 0, 19: 0, 111: 0}
+            reader_timing._capacity_probe_phase = label
+        phase = label
+        for module in actor_timing_modules:
+            module._capacity_timing_phase = label
 
     def observe(bot, event):
         if event.__class__.__name__ != "TickEvent" or not (
@@ -526,12 +616,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             await asyncio.sleep(1)
 
     async def stage(label, bots, seconds=60):
-        nonlocal phase
-        phase = label
-        if reader_timing is not None:
-            reader_timing._capacity_probe_phase = label
-        for module in actor_timing_modules:
-            module._capacity_timing_phase = label
+        set_phase(label)
         beginning = process_usage(os.getpid())
         inputs_before = {}
         inbound_counts_before = {}
@@ -630,11 +715,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             await asyncio.gather(*(bot.wait_ready(ready_timeout_s) for bot in bots))
             report["ready_seconds"] = round(time.monotonic() - started, 3)
             report["players_joined"] = await asyncio.to_thread(check_players, server, names, count)
-            phase = "warmup"
-            if reader_timing is not None:
-                reader_timing._capacity_probe_phase = phase
-            for module in actor_timing_modules:
-                module._capacity_timing_phase = phase
+            set_phase("warmup")
             await asyncio.sleep(20)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
             if count == 50 and transport == "raknet":
@@ -697,11 +778,7 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
             Session._capacity_reader_yield = True
             await stage("active", bots)
             assert all(bot.get_status().state == BotState.ready for bot in bots)
-            phase = "teardown"
-            if reader_timing is not None:
-                reader_timing._capacity_probe_phase = phase
-            for module in actor_timing_modules:
-                module._capacity_timing_phase = phase
+            set_phase("teardown")
         report["players_after_close"] = await asyncio.to_thread(check_players, server, names, 0)
         if report["acceptance_failures"]:
             raise AssertionError("capacity acceptance failed: " + "; ".join(report["acceptance_failures"]))
@@ -900,11 +977,29 @@ async def exercise_capacity(server: Server, results: dict, transport: str, count
                                  "batch_bytes", "batch_packet_count"))
                 writer.writerows(reader_timing._capacity_probe_rows)
         if actor_timing_modules:
+            actor_timing_phase_hits.setdefault(phase, dict(reader_timing._capacity_actor_handler_hits))
             with (work / "capacity_actor_timing.csv").open("w", newline="") as fh:
-                writer = csv.writer(fh)
-                writer.writerow(("phase", "stage", "event_kind", "sample_no", "duration_us"))
-                for module in actor_timing_modules:
-                    writer.writerows(module._capacity_timing_rows)
+                fieldnames = (
+                    "phase", "record_type", "packet_id", "actor_path", "packet_hit_count", "sample_no",
+                    "handler_duration_us", "handler_exclusive_us",
+                    "actor_state_motion_us", "actor_state_motion_calls", "actor_state_motion_hit",
+                    "actor_state_move_us", "actor_state_move_calls",
+                    "session_move_actor_us", "session_move_actor_calls", "move_actor_exclusive_us",
+                    "runtime_wants_mask_direct_us", "runtime_wants_mask_direct_calls",
+                    "runtime_wants_mask_emit_us", "runtime_wants_mask_emit_calls",
+                    "runtime_wants_mask_us", "runtime_wants_mask_calls",
+                    "runtime_emit_actor_motion_us", "runtime_emit_actor_motion_calls",
+                    "runtime_emit_actor_us", "runtime_emit_actor_calls",
+                )
+                writer = csv.DictWriter(fh, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(reader_timing._capacity_actor_timing_rows)
+                for phase_name, counts in actor_timing_phase_hits.items():
+                    for packet_id, hit_count in counts.items():
+                        writer.writerow({
+                            "phase": phase_name, "record_type": "phase_hits", "packet_id": packet_id,
+                            "packet_hit_count": hit_count,
+                        })
         results["capacity"] = {key: value for key, value in report.items() if key != "environment"}
     if server_sampler_invalid:
         raise RuntimeError(report["error"])
