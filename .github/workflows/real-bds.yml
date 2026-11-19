@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   endpilot:
-    if: github.actor == 'ReallocAll' && !inputs.settings_probe
+    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe
     name: EndPilot (${{ matrix.suite }}, ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
