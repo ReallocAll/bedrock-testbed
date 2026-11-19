@@ -110,6 +110,8 @@ def main() -> int:
                     else:
                         raise TimeoutError("BDS never confirmed player spawn")
                     results["checks"].append("bds_spawn_confirmed_before_querytarget")
+                    server.command("tp EndPilotTest 0.5 68 0.5")
+                    time.sleep(0.5)
                     origin = server_position(server)
                     deadline = time.monotonic() + 16
                     while time.monotonic() < deadline:
