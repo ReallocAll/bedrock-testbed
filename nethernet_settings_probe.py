@@ -113,7 +113,13 @@ def main() -> int:
                     origin = server_position(server)
                     deadline = time.monotonic() + 16
                     while time.monotonic() < deadline:
-                        current = server_position(server)
+                        try:
+                            current = server_position(server)
+                        except TimeoutError:
+                            if process.poll() is not None:
+                                stdout, stderr = process.communicate(timeout=5)
+                                raise AssertionError(f"Walk client ended without BDS displacement: {stdout} {stderr}")
+                            raise
                         distance = math.hypot(current["x"] - origin["x"], current["z"] - origin["z"])
                         if distance >= 0.5:
                             break
