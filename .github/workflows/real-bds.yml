@@ -155,6 +155,9 @@ jobs:
         run: |
           python -m venv .venv-server
           .venv-server/bin/python -m pip install 'endstone==0.11.14'
+      - name: Install diagnostic input receiver
+        if: inputs.walk_probe
+        run: .venv-server/bin/python -m pip install ./test_support/input_trace
       - name: Get pinned upstream protocol wheel
         uses: actions/download-artifact@v8
         with:
