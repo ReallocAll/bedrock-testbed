@@ -118,7 +118,8 @@ def main() -> int:
                         if distance >= 0.5:
                             break
                         if process.poll() is not None:
-                            break
+                            stdout, stderr = process.communicate(timeout=5)
+                            raise RuntimeError(f"Walk client exited early (code={process.returncode}): {stdout} {stderr}")
                         time.sleep(0.35)
                     results["movement"] = {"origin": origin, "final_observed": current, "horizontal_displacement": round(distance, 3)}
                     if distance < 0.5:
