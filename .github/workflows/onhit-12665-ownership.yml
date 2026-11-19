@@ -1,0 +1,53 @@
+name: Isolated BDS 1.26.65 OnHit ownership trace
+
+on:
+  push:
+    branches: [test/onhit-12665-ownership]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ownership:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned runtime and existing simulated-player provider
+        run: |
+          python -m venv .venv-server
+          .venv-server/bin/python -m pip install 'endstone==0.11.16'
+          .venv-server/bin/python -m pip install 'git+https://github.com/ReallocAll/endstone-bot.git@4bd0691f1ef0f551e5ba258d4747b35a3b748177'
+          .venv-server/bin/python -m pip check
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gdb binutils
+      - name: Trace real projectile lifecycle without OnHitFix plugin
+        run: |
+          python -m py_compile server.py onhit_12665_probe.py
+          python onhit_12665_probe.py --server-python .venv-server/bin/python
+      - name: Print evidence summary
+        if: always()
+        run: |
+          if test -f work-onhit65/result.json; then cat work-onhit65/result.json; fi
+          if test -f work-onhit65/ownership-gdb.log; then
+            grep -E 'COPY_|CLEANUP_NONEMPTY|IMPACT_DELETING_DTOR|Error|warning' work-onhit65/ownership-gdb.log | tail -100 || true
+          fi
+          if test -f work-onhit65/bds.log; then tail -n 45 work-onhit65/bds.log; fi
+      - name: Preserve isolated trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onhit-12665-native-ownership
+          path: |
+            work-onhit65/result.json
+            work-onhit65/ownership-gdb.log
+            work-onhit65/bds.log
+            work-onhit65/server/version.txt
+          if-no-files-found: warn
+          retention-days: 14
