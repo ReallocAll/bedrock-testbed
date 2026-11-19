@@ -150,13 +150,16 @@ def main():
             server_has(f"placement_gate_event={x - 1} cancelled={cancelled}", offset)
             offset = server.command(f"testforblock {x} 100 0 {expected}")
             server_has("successfully found", offset)
-            client_line = until(f"placement_update=" if x == 3 else "placement_")
-            if x == 3:
-                update = json.loads(client_line.partition("placement_update=")[2])
-                assert update["x"] == 3 and update["layer"] == 0 and update["runtime_id"] > 0, update
-                result["allowed_update"] = update
+            client_line = until("placement_update=")
+            update = json.loads(client_line.partition("placement_update=")[2])
+            assert update["x"] == x and update["layer"] == 0, update
+            if cancelled:
+                # The rejected target must not appear as the gold block observed on its support.
+                assert update["runtime_id"] != supports[0], update
+                result["cancelled_update"] = update
             else:
-                result["cancelled_client_result"] = client_line.strip()
+                assert update["runtime_id"] == supports[1], update
+                result["allowed_update"] = update
             result["checks"].append(
                 "endstone_cancel_and_bds_air" if cancelled else "endstone_allow_bds_gold_and_client_update"
             )
