@@ -161,6 +161,8 @@ def main():
                 "endstone_cancel_and_bds_air" if cancelled else "endstone_allow_bds_gold_and_client_update"
             )
 
+        until("placement_checks_ready")
+        input_line("close")
         until("disconnected EndPilotTest")
         assert client.wait(timeout=10) == 0
         server.wait_player(False)
