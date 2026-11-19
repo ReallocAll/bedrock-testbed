@@ -19,6 +19,7 @@ def main() -> int:
     parser.add_argument("--server-python", required=True, type=Path)
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", required=True, type=Path)
+    parser.add_argument("--join", action="store_true", help="Verify server-side player entry and exit")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -63,20 +64,37 @@ def main() -> int:
         results["checks"].append("clean_nethernet_bds_ready")
 
         command = [sys.executable, str(args.probe.absolute()), "http://127.0.0.1:19132"]
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=30)
-        if completed.stdout:
-            print("[probe] " + completed.stdout.strip(), flush=True)
-        if completed.stderr:
-            print(completed.stderr, file=sys.stderr, flush=True)
-        if completed.returncode != 0:
-            raise RuntimeError(f"EndPilot probe exited with code {completed.returncode}")
-
-        algorithm, threshold = completed.stdout.strip().split()
-        results["compression"] = {
-            "algorithm": algorithm,
-            "threshold": int(threshold),
-        }
-        results["checks"].append("real_bds_network_settings_received")
+        if args.join:
+            command += ["--name", "EndPilotTest", "--hold", "15"]
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                server.wait_player(True, timeout=25)
+                results["checks"].append("bds_list_confirmed_player_online")
+                stdout, stderr = process.communicate(timeout=30)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
+            if stdout:
+                print("[join] " + stdout.strip(), flush=True)
+            if stderr:
+                print(stderr, file=sys.stderr, flush=True)
+            if process.returncode != 0 or "spawned EndPilotTest" not in stdout or "disconnected EndPilotTest" not in stdout:
+                raise RuntimeError(f"EndPilot join/leave failed (exit={process.returncode})")
+            results["checks"].append("client_reached_spawn_and_closed")
+            server.wait_player(False, timeout=20)
+            results["checks"].append("bds_list_confirmed_player_offline")
+        else:
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            if completed.stdout:
+                print("[probe] " + completed.stdout.strip(), flush=True)
+            if completed.stderr:
+                print(completed.stderr, file=sys.stderr, flush=True)
+            if completed.returncode != 0:
+                raise RuntimeError(f"EndPilot probe exited with code {completed.returncode}")
+            algorithm, threshold = completed.stdout.strip().split()
+            results["compression"] = {"algorithm": algorithm, "threshold": int(threshold)}
+            results["checks"].append("real_bds_network_settings_received")
 
         server.stop()
         server = None
