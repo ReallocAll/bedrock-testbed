@@ -75,8 +75,8 @@ def main():
             end = time.monotonic() + timeout
             while time.monotonic() < end:
                 lines = server.snapshot(start)
-                if any(marker in line for line in lines):
-                    return [line for line in lines if marker in line]
+                if any(marker.lower() in line.lower() for line in lines):
+                    return [line for line in lines if marker.lower() in line.lower()]
                 if server.process.poll() is not None:
                     raise RuntimeError(f"BDS exited waiting for {marker}")
                 time.sleep(0.1)
