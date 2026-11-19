@@ -81,7 +81,7 @@ def start_trace(server: Server, folder: Path):
         "commands 1\n"
         " silent\n"
         " if $rcx == 0\n"
-        "  printf \"COPY_DEFAULT source=null\\\\n\"\n"
+        "  printf \"COPY_DEFAULT source=null\\n\"\n"
         " else\n"
         "  set $copies = $copies + 1\n"
         "  set $start = *(unsigned long long*)($rcx+0x120)\n"
@@ -111,8 +111,9 @@ def start_trace(server: Server, folder: Path):
         "   set $p1 = *((unsigned long long*)$start+1)\n"
         "   set $p2 = *((unsigned long long*)$start+2)\n"
         "   set $p3 = *((unsigned long long*)$start+3)\n"
-        '   printf "CLEANUP_FOUR p0=0x%lx v0=0x%lx p1=0x%lx v1=0x%lx p2=0x%lx v2=0x%lx p3=0x%lx v3=0x%lx\\\\n", $p0, *(unsigned long long*)$p0, $p1, *(unsigned long long*)$p1, $p2, *(unsigned long long*)$p2, $p3, *(unsigned long long*)$p3\n'
-        "  end\n"        "  end\n"
+        '   printf "CLEANUP_FOUR p0=0x%lx v0=0x%lx p1=0x%lx v1=0x%lx p2=0x%lx v2=0x%lx p3=0x%lx v3=0x%lx\\n", $p0, *(unsigned long long*)$p0, $p1, *(unsigned long long*)$p1, $p2, *(unsigned long long*)$p2, $p3, *(unsigned long long*)$p3\n'
+        "  end\n"
+        "  end\n"
         " end\n"
         " continue\n"
         "end\n"
