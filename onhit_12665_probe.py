@@ -80,7 +80,9 @@ def start_trace(server: Server, folder: Path):
         f"break *0x{bias + 0x7757090:x}\n"
         "commands 1\n"
         " silent\n"
-        " if $rcx != 0\n"
+        " if $rcx == 0\n"
+        "  printf \"COPY_DEFAULT source=null\\\\n\"\n"
+        " else\n"
         "  set $copies = $copies + 1\n"
         "  set $start = *(unsigned long long*)($rcx+0x120)\n"
         "  set $end = *(unsigned long long*)($rcx+0x128)\n"
@@ -104,7 +106,13 @@ def start_trace(server: Server, folder: Path):
         "  set $nonempty_cleanup = $nonempty_cleanup + 1\n"
         "  if $nonempty_cleanup <= 160\n"
         '   printf "CLEANUP_NONEMPTY record=0x%lx first=0x%lx count=%lu\\n", $rdi, *(unsigned long long*)$start, ($end-$start)/8\n'
-        "  end\n"
+        "  if $end - $start == 32\n"
+        "   set $p0 = *(unsigned long long*)$start\n"
+        "   set $p1 = *((unsigned long long*)$start+1)\n"
+        "   set $p2 = *((unsigned long long*)$start+2)\n"
+        "   set $p3 = *((unsigned long long*)$start+3)\n"
+        '   printf "CLEANUP_FOUR p0=0x%lx v0=0x%lx p1=0x%lx v1=0x%lx p2=0x%lx v2=0x%lx p3=0x%lx v3=0x%lx\\\\n", $p0, *(unsigned long long*)$p0, $p1, *(unsigned long long*)$p1, $p2, *(unsigned long long*)$p2, $p3, *(unsigned long long*)$p3\n'
+        "  end\n"        "  end\n"
         " end\n"
         " continue\n"
         "end\n"
@@ -263,7 +271,7 @@ def main():
             thread.join(timeout=4)
         if log and log.is_file():
             trace = log.read_text()
-            for name, marker in (("copy_nonempty","COPY_NONEMPTY "), ("copy_empty_observed","COPY_EMPTY "),
+            for name, marker in (("cleanup_four_logged","CLEANUP_FOUR "), ("copy_default_observed","COPY_DEFAULT "), ("copy_nonempty","COPY_NONEMPTY "), ("copy_empty_observed","COPY_EMPTY "),
                                  ("cleanup_nonempty_logged","CLEANUP_NONEMPTY "), ("impact_deleting_dtor_observed","IMPACT_DELETING_DTOR ")):
                 result[name] = trace.count(marker)
         (WORK / "result.json").write_text(json.dumps(result, indent=2) + "\n")
