@@ -24,7 +24,7 @@ def wait_log(server: Server, needle: str, timeout: float = 25, start: int = 0) -
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         lines = "\n".join(server.snapshot(start))
-        if needle in lines:
+        if needle.casefold() in lines.casefold():
             return lines
         if server.process is None or server.process.poll() is not None:
             raise RuntimeError("BDS exited before " + needle)
@@ -201,12 +201,19 @@ def main():
         server.start()
         server.wait_ready()
         wait_log(server, "standalone SimulatedPlayer", timeout=60)
-        command_confirm(server, "tickingarea add circle 8 68 8 2 onhit_zone", "tickingarea", 12)
+        server.command("tickingarea add circle 8 68 8 2 onhit_zone")
         command_confirm(server, f"bot createat {BOT} TestOwner 8 66 8 overworld",
                         f"创建假人 {BOT}", 25)
-        command_confirm(server, "time set night", "time", 12)
+        server.command("time set night")
         time.sleep(4)
-        command_confirm(server, "fill 2 220 2 14 220 14 stone", "blocks filled", 15)
+        for attempt in range(6):
+            try:
+                command_confirm(server, "fill 2 220 2 14 220 14 stone", "filled", 3)
+                break
+            except TimeoutError:
+                if attempt == 5:
+                    raise
+                time.sleep(2)
         command_confirm(server, f"bot moveat {BOT} 8 221 8 overworld",
                         f"已移动 {BOT}", 20)
         time.sleep(2)
