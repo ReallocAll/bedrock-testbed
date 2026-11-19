@@ -112,14 +112,15 @@ def main():
             "forward_distance": after["z"] - before["z"],
             "server_observation_ms": round((time.monotonic() - start) * 1000, 2),
         }
-        if after["z"] - before["z"] < 1.0:
-            raise AssertionError(f"BDS did not accept forward movement: {result['walking']}")
-        result["checks"].append("bds_querytarget_confirmed_walk")
-
         stdout, stderr = player.communicate(timeout=30)
         print("[client] " + stdout, flush=True)
         if stderr:
             print(stderr, file=sys.stderr, flush=True)
+        result["walking"]["client_exit_code"] = player.returncode
+        result["walking"]["client_stderr"] = stderr[-3000:]
+        if after["z"] - before["z"] < 1.0:
+            raise AssertionError(f"BDS did not accept forward movement: {result['walking']}")
+        result["checks"].append("bds_querytarget_confirmed_walk")
         if player.returncode != 0 or "disconnected EndPilotTest" not in stdout:
             raise RuntimeError(f"Walking script failed: exit={player.returncode}: {stderr}")
         match = re.search(r"^walk_input_submitted=(.+)$", stdout, re.M)
