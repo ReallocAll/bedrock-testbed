@@ -123,6 +123,16 @@ def start_trace(server: Server, folder: Path):
         ' printf "IMPACT_DELETING_DTOR object=0x%lx\\n", $rdi\n'
         " continue\n"
         "end\n"
+        f"break *0x{bias + 0x7143B40:x}\n"
+        "commands 4\n"
+        " silent\n"
+        " set $start = *(unsigned long long*)($rdi+0x120)\n"
+        " set $end = *(unsigned long long*)($rdi+0x128)\n"
+        " if $start != 0 && $end > $start && $end-$start <= 8192\n"
+        '  printf "REINIT_NONEMPTY record=0x%lx first=0x%lx count=%lu\\n", $rdi, *(unsigned long long*)$start, ($end-$start)/8\n'
+        " end\n"
+        " continue\n"
+        "end\n"
         "continue\n",
         encoding="ascii",
     )
@@ -140,7 +150,7 @@ def start_trace(server: Server, folder: Path):
             for line in process.stdout:
                 file.write(line)
                 file.flush()
-                if "Breakpoint 3 at" in line:
+                if "Breakpoint 4 at" in line:
                     ready.set()
 
     thread = threading.Thread(target=capture, daemon=True)
@@ -229,7 +239,7 @@ def main():
         result["checks"].append("real_simulated_player_and_arena")
         gdb, thread, log, bias = start_trace(server, folder)
         result["elf_load_bias"] = f"0x{bias:x}"
-        result["checks"].append("three_native_entry_breakpoints_armed")
+        result["checks"].append("four_native_entry_breakpoints_armed")
         for x,z in ((8,11),(10,12),(6,12)):
             command_confirm(server, f"summon shulker {x} 221 {z}", "successfully summoned", 15)
         result["checks"].append("three_shulkers_summoned")
@@ -250,6 +260,7 @@ def main():
         result["copy_empty_observed"] = trace.count("COPY_EMPTY ")
         result["cleanup_nonempty_logged"] = trace.count("CLEANUP_NONEMPTY ")
         result["impact_deleting_dtor_observed"] = trace.count("IMPACT_DELETING_DTOR ")
+        result["reinit_nonempty_observed"] = trace.count("REINIT_NONEMPTY ")
         result["checks"].append("native_lifetime_trace_collected")
         if result["cleanup_nonempty_logged"] == 0:
             raise RuntimeError("No nonempty OnHit cleanup record observed")
@@ -273,7 +284,7 @@ def main():
         if log and log.is_file():
             trace = log.read_text()
             for name, marker in (("cleanup_four_logged","CLEANUP_FOUR "), ("copy_default_observed","COPY_DEFAULT "), ("copy_nonempty","COPY_NONEMPTY "), ("copy_empty_observed","COPY_EMPTY "),
-                                 ("cleanup_nonempty_logged","CLEANUP_NONEMPTY "), ("impact_deleting_dtor_observed","IMPACT_DELETING_DTOR ")):
+                                 ("cleanup_nonempty_logged","CLEANUP_NONEMPTY "), ("impact_deleting_dtor_observed","IMPACT_DELETING_DTOR "), ("reinit_nonempty_observed","REINIT_NONEMPTY ")):
                 result[name] = trace.count(marker)
         (WORK / "result.json").write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result, ensure_ascii=False), flush=True)
