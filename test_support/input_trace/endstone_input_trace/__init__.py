@@ -19,4 +19,10 @@ class InputTrace(Plugin):
 
     @event_handler
     def on_move(self, event: PlayerMoveEvent):
-        self.logger.info(f"PlayerMoveEvent {event.player.name}")
+        source, target = event.from_location, event.to_location
+        self.logger.info(
+            f"PlayerMoveEvent {event.player.name} "
+            f"from=({source.x:.3f},{source.y:.3f},{source.z:.3f}) "
+            f"to=({target.x:.3f},{target.y:.3f},{target.z:.3f}) "
+            f"cancelled={event.is_cancelled}"
+        )
