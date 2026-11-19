@@ -20,8 +20,8 @@ on:
         required: false
         type: boolean
         default: false
-      walk_probe:
-        description: 'Verify NetherNet forward input against BDS querytarget coordinates'
+      position_probe:
+        description: 'Verify server teleport position received by the new NetherNet player'
         required: false
         type: boolean
         default: false
@@ -35,7 +35,7 @@ concurrency:
 
 jobs:
   endpilot:
-    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe && !inputs.walk_probe
+    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe && !inputs.position_probe
     name: EndPilot (${{ matrix.suite }}, ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
@@ -127,8 +127,8 @@ jobs:
           retention-days: 14
 
   network_settings:
-    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.walk_probe)
-    name: EndPilot (NetherNet settings, join or walk)
+    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.position_probe)
+    name: EndPilot (NetherNet settings, join or position)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -178,8 +178,8 @@ jobs:
           .venv-client/bin/python nethernet_settings_probe.py \
             --server-python .venv-server/bin/python \
             --endpilot-commit "$ENDPILOT_COMMIT" \
-            --probe "${{ inputs.walk_probe && 'endpilot-src/examples/walk_nethernet.py' || inputs.join_probe && 'endpilot-src/examples/join_nethernet.py' || 'endpilot-src/examples/probe_nethernet.py' }}" \
-            ${{ inputs.walk_probe && '--walk' || inputs.join_probe && '--join' || '' }}
+            --probe "${{ inputs.position_probe && 'endpilot-src/examples/observe_position_nethernet.py' || inputs.join_probe && 'endpilot-src/examples/join_nethernet.py' || 'endpilot-src/examples/probe_nethernet.py' }}" \
+            ${{ inputs.position_probe && '--position' || inputs.join_probe && '--join' || '' }}
       - name: Save evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4

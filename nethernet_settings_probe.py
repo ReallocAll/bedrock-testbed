@@ -1,14 +1,13 @@
-"""Run the released NetherNet settings probe against a fresh real BDS."""
+"""Run new-client NetherNet settings, join or position smoke on fresh BDS."""
 from __future__ import annotations
 
 import argparse
 import json
-import math
-import time
 import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from importlib.metadata import distribution
 from pathlib import Path
@@ -17,7 +16,7 @@ from server import ROOT, Server, configure
 
 
 def server_position(server):
-    """Return BDS querytarget coordinates, independent of client prediction."""
+    """Read the position accepted by BDS, not a client-side prediction."""
     offset = server.command("querytarget EndPilotTest")
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
@@ -29,13 +28,11 @@ def server_position(server):
             if end is not None:
                 raw = fields[start].split("Target data:", 1)[1] + " ".join(fields[start + 1:end + 1])
                 targets = json.loads(raw)
-                if len(targets) != 1:
+                if len(targets) != 1 or targets[0]["dimension"] != 0:
                     raise AssertionError(f"Unexpected querytarget result: {targets}")
                 return targets[0]["position"]
-        if any("unknown command" in s.lower() or "syntax error" in s.lower() for s in lines):
-            raise RuntimeError(f"querytarget unavailable: {lines[-6:]}")
         time.sleep(0.05)
-    raise TimeoutError(f"No complete querytarget response: {server.snapshot(offset)[-6:]}")
+    raise TimeoutError(f"No BDS querytarget response: {server.snapshot(offset)[-6:]}")
 
 
 def main() -> int:
@@ -43,8 +40,8 @@ def main() -> int:
     parser.add_argument("--server-python", required=True, type=Path)
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", required=True, type=Path)
-    parser.add_argument("--join", action="store_true", help="Verify server-side player entry and exit")
-    parser.add_argument("--walk", action="store_true", help="Verify server-authoritative forward displacement")
+    parser.add_argument("--join", action="store_true")
+    parser.add_argument("--position", action="store_true")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -89,50 +86,26 @@ def main() -> int:
         results["checks"].append("clean_nethernet_bds_ready")
 
         command = [sys.executable, str(args.probe.absolute()), "http://127.0.0.1:19132"]
-        if args.join or args.walk:
-            command += ["--name", "EndPilotTest"]
-            if args.walk:
-                command += ["--before", "5", "--after", "6"]
-            else:
-                command += ["--hold", "15"]
+        if args.join or args.position:
+            command += ["--name", "EndPilotTest", "--hold", "2" if args.position else "15"]
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             try:
                 server.wait_player(True, timeout=25)
                 results["checks"].append("bds_list_confirmed_player_online")
-                if args.walk:
-                    spawn_deadline = time.monotonic() + 12
-                    while time.monotonic() < spawn_deadline:
+                if args.position:
+                    deadline = time.monotonic() + 12
+                    while time.monotonic() < deadline:
                         if any("Player Spawned: EndPilotTest" in line for line in server.snapshot()):
                             break
                         if process.poll() is not None:
-                            raise RuntimeError("walk client exited before BDS player spawn")
+                            raise RuntimeError("position client exited before BDS spawn")
                         time.sleep(0.1)
                     else:
                         raise TimeoutError("BDS never confirmed player spawn")
-                    results["checks"].append("bds_spawn_confirmed_before_querytarget")
                     server.command("tp EndPilotTest 0.5 68 0.5")
                     time.sleep(0.5)
-                    origin = server_position(server)
-                    deadline = time.monotonic() + 16
-                    while time.monotonic() < deadline:
-                        try:
-                            current = server_position(server)
-                        except TimeoutError:
-                            if process.poll() is not None:
-                                stdout, stderr = process.communicate(timeout=5)
-                                raise AssertionError(f"Walk client ended without BDS displacement: {stdout} {stderr}")
-                            raise
-                        distance = math.hypot(current["x"] - origin["x"], current["z"] - origin["z"])
-                        if distance >= 0.5:
-                            break
-                        if process.poll() is not None:
-                            stdout, stderr = process.communicate(timeout=5)
-                            raise RuntimeError(f"Walk client exited early (code={process.returncode}): {stdout} {stderr}")
-                        time.sleep(0.35)
-                    results["movement"] = {"origin": origin, "final_observed": current, "horizontal_displacement": round(distance, 3)}
-                    if distance < 0.5:
-                        raise AssertionError(f"BDS did not observe forward movement: {results['movement']}")
-                    results["checks"].append("real_bds_querytarget_displacement_confirmed")
+                    authoritative = server_position(server)
+                    results["checks"].append("bds_teleport_and_querytarget_confirmed")
                 stdout, stderr = process.communicate(timeout=30)
             finally:
                 if process.poll() is None:
@@ -142,9 +115,18 @@ def main() -> int:
                 print("[join] " + stdout.strip(), flush=True)
             if stderr:
                 print(stderr, file=sys.stderr, flush=True)
-            if process.returncode != 0 or "spawned EndPilotTest" not in stdout or "disconnected EndPilotTest" not in stdout or (args.walk and "submitted 34 input frames" not in stdout):
-                raise RuntimeError(f"EndPilot join/leave failed (exit={process.returncode})")
+            if process.returncode != 0 or "spawned EndPilotTest" not in stdout or "disconnected EndPilotTest" not in stdout:
+                raise RuntimeError(f"EndPilot player script failed (exit={process.returncode}): {stdout} {stderr}")
             results["checks"].append("client_reached_spawn_and_closed")
+            if args.position:
+                match = re.search(r"^server_position_update=(.+)$", stdout, re.M)
+                if not match:
+                    raise AssertionError(f"Client did not observe BDS teleport: {stdout}")
+                observed = json.loads(match.group(1))
+                if any(abs(float(authoritative[k]) - float(observed[k])) > 0.05 for k in ("x", "y", "z")):
+                    raise AssertionError(f"BDS/client positions differ: {authoritative} vs {observed}")
+                results["position_sync"] = {"bds": authoritative, "client": observed}
+                results["checks"].append("server_teleport_observed_by_client")
             server.wait_player(False, timeout=20)
             results["checks"].append("bds_list_confirmed_player_offline")
         else:
