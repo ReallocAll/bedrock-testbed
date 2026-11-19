@@ -77,6 +77,7 @@ def start_trace(server: Server, folder: Path):
         "set $copies = 0\n"
         "set $nonempty_copies = 0\n"
         "set $nonempty_cleanup = 0\n"
+        "set $init_calls = 0\n"
         f"break *0x{bias + 0x7757090:x}\n"
         "commands 1\n"
         " silent\n"
@@ -126,6 +127,10 @@ def start_trace(server: Server, folder: Path):
         f"break *0x{bias + 0x7143B40:x}\n"
         "commands 4\n"
         " silent\n"
+        " set $init_calls = $init_calls + 1\n"
+        " if $init_calls <= 160\n"
+        '  printf "REINIT_ENTRY record=0x%lx\\n", $rdi\n'
+        " end\n"
         " set $start = *(unsigned long long*)($rdi+0x120)\n"
         " set $end = *(unsigned long long*)($rdi+0x128)\n"
         " if $start != 0 && $end > $start && $end-$start <= 8192\n"
@@ -261,6 +266,7 @@ def main():
         result["cleanup_nonempty_logged"] = trace.count("CLEANUP_NONEMPTY ")
         result["impact_deleting_dtor_observed"] = trace.count("IMPACT_DELETING_DTOR ")
         result["reinit_nonempty_observed"] = trace.count("REINIT_NONEMPTY ")
+        result["reinit_entries_logged"] = trace.count("REINIT_ENTRY ")
         result["checks"].append("native_lifetime_trace_collected")
         if result["cleanup_nonempty_logged"] == 0:
             raise RuntimeError("No nonempty OnHit cleanup record observed")
@@ -284,7 +290,7 @@ def main():
         if log and log.is_file():
             trace = log.read_text()
             for name, marker in (("cleanup_four_logged","CLEANUP_FOUR "), ("copy_default_observed","COPY_DEFAULT "), ("copy_nonempty","COPY_NONEMPTY "), ("copy_empty_observed","COPY_EMPTY "),
-                                 ("cleanup_nonempty_logged","CLEANUP_NONEMPTY "), ("impact_deleting_dtor_observed","IMPACT_DELETING_DTOR "), ("reinit_nonempty_observed","REINIT_NONEMPTY ")):
+                                 ("cleanup_nonempty_logged","CLEANUP_NONEMPTY "), ("impact_deleting_dtor_observed","IMPACT_DELETING_DTOR "), ("reinit_nonempty_observed","REINIT_NONEMPTY "), ("reinit_entries_logged","REINIT_ENTRY ")):
                 result[name] = trace.count(marker)
         (WORK / "result.json").write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result, ensure_ascii=False), flush=True)
