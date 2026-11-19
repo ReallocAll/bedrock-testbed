@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "endstone-placement-gate"
+version = "0.0.1"
+requires-python = ">=3.12"
+
+[project.entry-points."endstone"]
+placement_gate = "placement_gate:PlacementGate"
+
+[tool.setuptools]
+packages = ["placement_gate"]
