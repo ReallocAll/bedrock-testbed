@@ -71,6 +71,8 @@ def main():
         result["checks"].append("official_bds_bootstrap_verified")
 
         configure(folder / "server.properties", "nethernet")
+        props_path = folder / "server.properties"
+        props_path.write_text(props_path.read_text() + "\nserver-authoritative-movement=server-auth\n")
         properties = (folder / "server.properties").read_text().splitlines()
         authoritative = next((line for line in properties
                               if line.startswith("server-authoritative-movement=")), None)
