@@ -15,6 +15,11 @@ on:
         required: false
         type: boolean
         default: false
+      join_probe:
+        description: 'Verify offline-mode join/spawn/leave on new EndPilot'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -117,8 +122,8 @@ jobs:
           retention-days: 14
 
   network_settings:
-    if: github.actor == 'ReallocAll' && inputs.settings_probe
-    name: EndPilot (NetherNet settings)
+    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe)
+    name: EndPilot (NetherNet settings or join)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -162,13 +167,14 @@ jobs:
             "endpilot[nethernet] @ git+https://github.com/ReallocAll/endpilot.git@${ENDPILOT_COMMIT}"
           .venv-client/bin/python -m pip check
           .venv-client/bin/python -m pip show endpilot bedrock-protocol
-      - name: Probe compression settings from fresh real BDS
+      - name: Verify settings or player join against fresh real BDS
         shell: bash
         run: |
           .venv-client/bin/python nethernet_settings_probe.py \
             --server-python .venv-server/bin/python \
             --endpilot-commit "$ENDPILOT_COMMIT" \
-            --probe endpilot-src/examples/probe_nethernet.py
+            --probe "${{ inputs.join_probe && 'endpilot-src/examples/join_nethernet.py' || 'endpilot-src/examples/probe_nethernet.py' }}" \
+            ${{ inputs.join_probe && '--join' || '' }}
       - name: Save evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
