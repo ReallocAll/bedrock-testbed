@@ -10,6 +10,11 @@ on:
         required: false
         type: string
         default: '96045ce85d9ba373db64daab09cc7176e1e29a15'
+      settings_probe:
+        description: 'Run only the new EndPilot NetherNet settings probe'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -20,7 +25,7 @@ concurrency:
 
 jobs:
   endpilot:
-    if: github.actor == 'ReallocAll'
+    if: github.actor == 'ReallocAll' && !inputs.settings_probe
     name: EndPilot (${{ matrix.suite }}, ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
@@ -105,6 +110,72 @@ jobs:
             work/motion_trajectory.json
             work/controller_trajectory.json
             work/navigation_trajectory.json
+            work/bds.log
+            work/server/version.txt
+            work/server/server.properties
+          if-no-files-found: warn
+          retention-days: 14
+
+  network_settings:
+    if: github.actor == 'ReallocAll' && inputs.settings_probe
+    name: EndPilot (NetherNet settings)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ReallocAll/endpilot
+          ref: ${{ env.ENDPILOT_COMMIT }}
+          path: endpilot-src
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install isolated Endstone server
+        run: |
+          python -m venv .venv-server
+          .venv-server/bin/python -m pip install 'endstone==0.11.14'
+      - name: Get pinned upstream protocol wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: bedrock_protocol-0.5.0.dev0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+          repository: EndstoneMC/bedrock-protocol
+          run-id: 43980162669
+          github-token: ${{ secrets.REPO_DEVELOP }}
+          path: dependencies/protocol
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned new EndPilot client
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$ENDPILOT_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C endpilot-src rev-parse HEAD)" = "$ENDPILOT_COMMIT"
+          python -m venv .venv-client
+          .venv-client/bin/python -m pip install dependencies/protocol/*.whl \
+            "endpilot[nethernet] @ git+https://github.com/ReallocAll/endpilot.git@${ENDPILOT_COMMIT}"
+          .venv-client/bin/python -m pip check
+          .venv-client/bin/python -m pip show endpilot bedrock-protocol
+      - name: Probe compression settings from fresh real BDS
+        shell: bash
+        run: |
+          .venv-client/bin/python nethernet_settings_probe.py \
+            --server-python .venv-server/bin/python \
+            --endpilot-commit "$ENDPILOT_COMMIT" \
+            --probe endpilot-src/examples/probe_nethernet.py
+      - name: Save evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-bds-endpilot-network-settings
+          path: |
+            work/result.json
             work/bds.log
             work/server/version.txt
             work/server/server.properties
