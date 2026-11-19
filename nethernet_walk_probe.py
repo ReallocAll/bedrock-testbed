@@ -71,6 +71,11 @@ def main():
         result["checks"].append("official_bds_bootstrap_verified")
 
         configure(folder / "server.properties", "nethernet")
+        properties = (folder / "server.properties").read_text().splitlines()
+        authoritative = next((line for line in properties
+                              if line.startswith("server-authoritative-movement=")), None)
+        result["movement_mode"] = authoritative
+        print("[testbed] " + str(authoritative), flush=True)
         shutil.rmtree(folder / "worlds", ignore_errors=True)
         server = Server(args.server_python.absolute(), folder, work / "bds.log")
         server.start()
