@@ -112,11 +112,16 @@ def main():
         start = time.monotonic()
         player.stdin.write("go\n")
         player.stdin.flush()
+        # Correct the player *during* the 24-frame walk. This forces the
+        # client to abandon its old predicted origin and resume from BDS.
+        time.sleep(0.35)
+        server.command("tp EndPilotTest 5.5 100 0.5")
         time.sleep(3)
         after = server_position(server)
         result["walking"] = {
             "before": before, "after": after,
             "forward_distance": after["z"] - before["z"],
+            "mid_walk_teleport": {"x": 5.5, "y": 100, "z": 0.5},
             "server_observation_ms": round((time.monotonic() - start) * 1000, 2),
         }
         stdout, stderr = player.communicate(timeout=30)
@@ -128,6 +133,8 @@ def main():
         if after["z"] - before["z"] < 1.0:
             raise AssertionError(f"BDS did not accept forward movement: {result['walking']}")
         result["checks"].append("bds_querytarget_confirmed_walk")
+        if abs(after["x"] - 5.5) > 0.3:
+            raise AssertionError(f"BDS position did not retain the mid-walk correction: {result['walking']}")
         if player.returncode != 0 or "disconnected EndPilotTest" not in stdout:
             raise RuntimeError(f"Walking script failed: exit={player.returncode}: {stderr}")
         match = re.search(r"^walk_input_submitted=(.+)$", stdout, re.M)
@@ -137,6 +144,14 @@ def main():
         if frames["frames"] != 24:
             raise AssertionError(f"Incorrect input count: {frames}")
         result["walking"]["input"] = frames
+        match = re.search(r"^walk_server_packets=(.+)$", stdout, re.M)
+        if match is None:
+            raise AssertionError(f"No server movement packet record: {stdout}")
+        observed = json.loads(match.group(1))
+        result["walking"]["server_packets"] = observed
+        if 2 not in observed["movement_modes"]:
+            raise AssertionError(f"Client did not observe BDS mid-walk teleport: {observed}")
+        result["checks"].append("bds_mid_walk_teleport_and_continued_walking")
         result["checks"].append("client_submitted_24_frames_and_cleanly_left")
         server.wait_player(False, timeout=15)
         result["checks"].append("bds_list_player_offline")
