@@ -1,4 +1,4 @@
-"""Exercise the new Python SDK's input path against a fresh real NetherNet BDS."""
+"""Exercise the same public walking script on fresh NetherNet or RakNet BDS."""
 from __future__ import annotations
 
 import argparse
@@ -38,6 +38,7 @@ def main():
     parser.add_argument("--server-python", required=True, type=Path)
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", required=True, type=Path)
+    parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -45,7 +46,7 @@ def main():
         shutil.rmtree(work)
     work.mkdir()
     result = {
-        "status": "FAIL", "transport": "nethernet", "bds": "1.26.52",
+        "status": "FAIL", "transport": args.transport, "bds": "1.26.52",
         "endstone": "0.11.14", "protocol": 2193,
         "endpilot_commit": args.endpilot_commit,
         "timestamp": datetime.now(timezone.utc).isoformat(), "checks": [],
@@ -70,7 +71,7 @@ def main():
         server = None
         result["checks"].append("official_bds_bootstrap_verified")
 
-        configure(folder / "server.properties", "nethernet")
+        configure(folder / "server.properties", args.transport)
         properties = (folder / "server.properties").read_text().splitlines()
         authoritative = next((line for line in properties
                               if line.startswith("server-authoritative-movement=")), None)
@@ -82,7 +83,8 @@ def main():
         server.wait_ready()
 
         player = subprocess.Popen(
-            [sys.executable, str(args.probe.absolute()), "http://127.0.0.1:19132",
+            [sys.executable, str(args.probe.absolute()),
+             "http://127.0.0.1:19132" if args.transport == "nethernet" else "raknet://127.0.0.1:19132",
              "--name", "EndPilotTest", "--ticks", "24", "--hold", "4"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True,

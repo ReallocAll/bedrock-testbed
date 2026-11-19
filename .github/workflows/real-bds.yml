@@ -177,7 +177,7 @@ jobs:
           test "$(git -C endpilot-src rev-parse HEAD)" = "$ENDPILOT_COMMIT"
           python -m venv .venv-client
           .venv-client/bin/python -m pip install dependencies/protocol/*.whl \
-            "endpilot[nethernet] @ git+https://github.com/ReallocAll/endpilot.git@${ENDPILOT_COMMIT}"
+            "endpilot[nethernet,raknet] @ git+https://github.com/ReallocAll/endpilot.git@${ENDPILOT_COMMIT}"
           .venv-client/bin/python -m pip check
           .venv-client/bin/python -m pip show endpilot bedrock-protocol
       - name: Verify actual walking against fresh BDS
@@ -187,7 +187,14 @@ jobs:
           .venv-client/bin/python nethernet_walk_probe.py \
             --server-python .venv-server/bin/python \
             --endpilot-commit "$ENDPILOT_COMMIT" \
-            --probe endpilot-src/examples/walk_nethernet.py
+            --probe endpilot-src/examples/walk.py \
+            --transport nethernet
+          cp work/result.json nethernet-walk-result.json
+          .venv-client/bin/python nethernet_walk_probe.py \
+            --server-python .venv-server/bin/python \
+            --endpilot-commit "$ENDPILOT_COMMIT" \
+            --probe endpilot-src/examples/walk.py \
+            --transport raknet
       - name: Verify settings or player join against fresh real BDS
         if: '!inputs.walk_probe'
         shell: bash
@@ -204,6 +211,7 @@ jobs:
           name: real-bds-endpilot-network-settings
           path: |
             work/result.json
+            nethernet-walk-result.json
             work/bds.log
             work/server/version.txt
             work/server/server.properties
