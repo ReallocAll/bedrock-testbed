@@ -100,6 +100,16 @@ def main() -> int:
                 server.wait_player(True, timeout=25)
                 results["checks"].append("bds_list_confirmed_player_online")
                 if args.walk:
+                    spawn_deadline = time.monotonic() + 12
+                    while time.monotonic() < spawn_deadline:
+                        if any("Player Spawned: EndPilotTest" in line for line in server.snapshot()):
+                            break
+                        if process.poll() is not None:
+                            raise RuntimeError("walk client exited before BDS player spawn")
+                        time.sleep(0.1)
+                    else:
+                        raise TimeoutError("BDS never confirmed player spawn")
+                    results["checks"].append("bds_spawn_confirmed_before_querytarget")
                     origin = server_position(server)
                     deadline = time.monotonic() + 16
                     while time.monotonic() < deadline:
