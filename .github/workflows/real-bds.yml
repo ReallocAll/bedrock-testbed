@@ -148,7 +148,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        transport: ${{ fromJSON(inputs.walk_probe && '["nethernet","raknet"]' || '["nethernet"]') }}
+        transport: ${{ fromJSON((inputs.walk_probe || inputs.block_probe) && '["nethernet","raknet"]' || '["nethernet"]') }}
     timeout-minutes: 30
     env:
       ENDPILOT_COMMIT: ${{ inputs.endpilot_commit }}
