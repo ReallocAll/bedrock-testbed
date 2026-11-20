@@ -103,7 +103,21 @@ def main():
 
         if args.subchunk:
             server.command("setblock 2 100 0 gold_block")
-            time.sleep(.5)
+            for pos, name in (((2, 100, 0), "gold_block"),
+                              ((3, 100, 0), "air"),
+                              ((2, 99, 0), "stone")):
+                offset = server.command(f"testforblock {pos[0]} {pos[1]} {pos[2]} {name}")
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    evidence = server.snapshot(offset)
+                    if any("successfully found" in line.lower() for line in evidence):
+                        break
+                    if any("failed" in line.lower() or "not found" in line.lower() for line in evidence):
+                        raise AssertionError(f"BDS block oracle rejected {pos}={name}: {evidence}")
+                    time.sleep(.1)
+                else:
+                    raise TimeoutError(f"No BDS block oracle for {pos}={name}: {server.snapshot(offset)}")
+            results["checks"].append("bds_gold_air_stone_testforblock_confirmed")
 
         client.stdin.write("go\n")
         client.stdin.flush()
