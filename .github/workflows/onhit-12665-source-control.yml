@@ -1,8 +1,6 @@
 name: Control BDS 1.26.65 startup on unmodified Endstone v0.11
 
 on:
-  push:
-    branches: [test/onhit-12665-runtime]
   workflow_dispatch:
 
 permissions:
