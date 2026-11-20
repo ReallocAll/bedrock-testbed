@@ -74,9 +74,12 @@ def main():
         server.start()
         server.wait_ready()
         if args.attack:
-            assert any("combat_probe_enabled" in line for line in server.snapshot()), (
-                "Endstone combat observer not enabled", server.snapshot()[-20:]
-            )
+            # Server Ready precedes plugin on_enable; wait for the listener.
+            deadline = time.monotonic() + 10
+            while not any("combat_probe_enabled" in line for line in server.snapshot()):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Combat observer did not enable: {server.snapshot()[-20:]}")
+                time.sleep(0.1)
 
         url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
                else "raknet://127.0.0.1:19132")
