@@ -47,6 +47,54 @@ jobs:
           python -m py_compile server.py onhit_12665_probe.py
           ENDSTONE_TEST_VERSION="$(.venv-server/bin/python -c 'import importlib.metadata as m; print(m.version("endstone"))')" \
             python onhit_12665_probe.py --server-python .venv-server/bin/python
+      - name: Diagnose early native startup failure
+        if: failure()
+        shell: bash
+        run: |
+          set -u
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sysconfig
+          pyexe = (Path.cwd() / ".venv-server/bin/python").resolve()
+          libdir = Path(subprocess.check_output(
+              [str(pyexe), "-c", "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))"],
+              text=True
+          ).strip())
+          runtime = Path(subprocess.check_output(
+              [str(pyexe), "-c", "from pathlib import Path; import endstone; print(Path(endstone.__file__).parent / 'libendstone_runtime.so')"],
+              text=True
+          ).strip())
+          game = (Path.cwd() / "work-onhit65/server").resolve()
+          if not (game / "bedrock_server").is_file() or not runtime.is_file():
+              print("No BDS/runtime to diagnose")
+              raise SystemExit(0)
+          options = [
+              "set pagination off",
+              "set confirm off",
+              "set print thread-events off",
+              "set disable-randomization off",
+              "handle SIGPIPE nostop noprint pass",
+              f"set environment LD_PRELOAD {runtime.parent / 'libmimalloc.so'}:{runtime}",
+              f"set environment LD_LIBRARY_PATH {libdir}",
+              f"set environment ENDSTONE_PYTHON_EXECUTABLE {pyexe}",
+              f"set environment PYTHONPATH {pyexe.parent.parent / 'lib'}",
+              "set environment PYTHONIOENCODING UTF-8",
+              "run",
+              "bt 28",
+              "info registers rip rdi rsi rdx rcx",
+              "x/8i $pc",
+          ]
+          args = ["timeout", "110s", "gdb", "-q", "-nx", "--batch"]
+          for item in options:
+              args += ["-ex", item]
+          args += ["--args", str(game / "bedrock_server")]
+          with (Path.cwd() / "work-onhit65/startup-gdb.log").open("w") as logfile:
+              proc = subprocess.run(args, cwd=game, stdout=logfile,
+                                    stderr=subprocess.STDOUT, timeout=120, check=False)
+          print("Diagnostic GDB returncode:", proc.returncode)
+          print((Path.cwd() / "work-onhit65/startup-gdb.log").read_text(errors="replace")[-12000:])
+          PY
       - name: Print decisive events
         if: always()
         run: |
@@ -62,6 +110,7 @@ jobs:
           name: onhit-12665-patched-native-ownership
           path: |
             work-onhit65/result.json
+            work-onhit65/startup-gdb.log
             work-onhit65/ownership-gdb.log
             work-onhit65/bds.log
             work-onhit65/server/version.txt
