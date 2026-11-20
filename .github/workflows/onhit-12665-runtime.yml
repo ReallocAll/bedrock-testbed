@@ -41,14 +41,14 @@ jobs:
           .venv-server/bin/python -m pip install 'git+https://github.com/ReallocAll/endstone-bot.git@4bd0691f1ef0f551e5ba258d4747b35a3b748177'
           .venv-server/bin/python -m pip check
           .venv-server/bin/python -c 'import importlib.metadata as m; print("PATCHED_ENDSTONE_VERSION",m.version("endstone"))'
-      - name: Install official precompiled mimalloc 3.5.1
+      - name: Install official precompiled mimalloc 3.7.0
         shell: bash
         run: |
           set -euo pipefail
-          url=https://github.com/microsoft/mimalloc/releases/download/v3.5.1/mimalloc-v3.5.1-linux-x64.tar.gz
+          url=https://github.com/microsoft/mimalloc/releases/download/v3.7.0/mimalloc-v3.7.0-linux-x64.tar.gz
           mkdir -p external-mimalloc
           curl --fail --location --retry 3 --silent --show-error "$url" -o external-mimalloc/official.tar.gz
-          echo "3d9cfe526589d77171e0b39b16fa202391045f880002723cf71dd525a9158f12  external-mimalloc/official.tar.gz" | sha256sum --check
+          echo "bb6198f1bcefcdaa9384b738b568d46be6550d8cf60d84281252a6c7f3839cd4  external-mimalloc/official.tar.gz" | sha256sum --check
           tar -xzf external-mimalloc/official.tar.gz -C external-mimalloc
           python - <<'PY'
           import os
