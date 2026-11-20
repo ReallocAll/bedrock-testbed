@@ -107,7 +107,7 @@ def main():
         result["checks"].append("client_health_watcher_armed")
         start = server.command("damage EndPilotTest 4")
         observed = float(until("health_update="))
-        if not 0 <= observed < 20:
+        if observed != 16.0:
             raise AssertionError(f"Unexpected server-reported post-damage health: {observed}")
         deadline = time.monotonic() + 6
         while time.monotonic() < deadline:
