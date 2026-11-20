@@ -174,6 +174,10 @@ def start_trace(server: Server, folder: Path):
         "set $nonempty_copies = 0\n"
         "set $nonempty_cleanup = 0\n"
         "set $init_calls = 0\n"
+        "set $old0 = 0\n"
+        "set $old1 = 0\n"
+        "set $old2 = 0\n"
+        "set $oldrecord = 0\n"
         f"break *0x{bias + 0x7757090:x}\n"
         "commands 1\n"
         " silent\n"
@@ -237,6 +241,13 @@ def start_trace(server: Server, folder: Path):
         " set $end = *(unsigned long long*)($rdi+0x128)\n"
         " if $start != 0 && $end > $start && $end-$start <= 8192\n"
         '  printf "REINIT_NONEMPTY record=0x%lx first=0x%lx count=%lu\\n", $rdi, *(unsigned long long*)$start, ($end-$start)/8\n'
+        '  if $end-$start == 24\n'
+        '   set $oldrecord = $rdi\n'
+        '   set $old0 = *(unsigned long long*)$start\n'
+        '   set $old1 = *((unsigned long long*)$start+1)\n'
+        '   set $old2 = *((unsigned long long*)$start+2)\n'
+        '   printf "OLD_TRIPLET record=0x%lx p0=0x%lx v0=0x%lx p1=0x%lx v1=0x%lx p2=0x%lx v2=0x%lx\\n", $oldrecord, $old0, *(unsigned long long*)$old0, $old1, *(unsigned long long*)$old1, $old2, *(unsigned long long*)$old2\n'
+        '  end\n'
         " end\n"
         " continue\n"
         "end\n"
@@ -247,6 +258,12 @@ def start_trace(server: Server, folder: Path):
         " continue\n"
         "end\n"
         + remaining_deleting_destructor_breakpoints(bias)
+        + f"break *0x{bias + 0x41FB010:x} if $old0 != 0 && ($rdi == $old0 || $rdi == $old1 || $rdi == $old2)\n"
+        + "commands 14\n"
+        + " silent\n"
+        + ' printf "OLD_CHILD_DEALLOC object=0x%lx size=%lu\\n", $rdi, $rsi\n'
+        + " continue\n"
+        + "end\n"
         + "continue\n",
         encoding="ascii",
     )
@@ -264,7 +281,7 @@ def start_trace(server: Server, folder: Path):
             for line in process.stdout:
                 file.write(line)
                 file.flush()
-                if "Breakpoint 13 at" in line:
+                if "Breakpoint 14 at" in line:
                     ready.set()
 
     thread = threading.Thread(target=capture, daemon=True)
