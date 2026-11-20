@@ -107,6 +107,12 @@ def start_trace(server: Server, folder: Path):
         "  set $nonempty_cleanup = $nonempty_cleanup + 1\n"
         "  if $nonempty_cleanup <= 160\n"
         '   printf "CLEANUP_NONEMPTY record=0x%lx first=0x%lx count=%lu\\n", $rdi, *(unsigned long long*)$start, ($end-$start)/8\n'
+        "  if $end - $start == 24\n"
+        "   set $p0 = *(unsigned long long*)$start\n"
+        "   set $p1 = *((unsigned long long*)$start+1)\n"
+        "   set $p2 = *((unsigned long long*)$start+2)\n"
+        '   printf "CLEANUP_THREE p0=0x%lx v0=0x%lx p1=0x%lx v1=0x%lx p2=0x%lx v2=0x%lx\\n", $p0, *(unsigned long long*)$p0, $p1, *(unsigned long long*)$p1, $p2, *(unsigned long long*)$p2\n'
+        "  end\n"
         "  if $end - $start == 32\n"
         "   set $p0 = *(unsigned long long*)$start\n"
         "   set $p1 = *((unsigned long long*)$start+1)\n"
@@ -261,6 +267,9 @@ def main():
         if not result["shulker_bullet_observed"]:
             raise RuntimeError("No real shulker bullet observed")
         result["checks"].append("real_shulker_bullet_observed")
+        for x, z in ((6, 8), (8, 8), (10, 8), (6, 10), (8, 10), (10, 10)):
+            command_confirm(server, f"summon arrow {x} 225 {z}", "successfully summoned", 15)
+        result["checks"].append("six_direct_arrows_summoned")
         for _ in range(3):
             time.sleep(8)
         server.stop()
@@ -299,7 +308,7 @@ def main():
             thread.join(timeout=4)
         if log and log.is_file():
             trace = log.read_text()
-            for name, marker in (("cleanup_four_logged","CLEANUP_FOUR "), ("copy_payload_entries","COPY_PAYLOAD "), ("copy_default_observed","COPY_DEFAULT "), ("copy_nonempty","COPY_NONEMPTY "), ("copy_empty_observed","COPY_EMPTY "),
+            for name, marker in (("cleanup_three_logged","CLEANUP_THREE "), ("cleanup_four_logged","CLEANUP_FOUR "), ("copy_payload_entries","COPY_PAYLOAD "), ("copy_default_observed","COPY_DEFAULT "), ("copy_nonempty","COPY_NONEMPTY "), ("copy_empty_observed","COPY_EMPTY "),
                                  ("cleanup_nonempty_logged","CLEANUP_NONEMPTY "), ("impact_deleting_dtor_observed","IMPACT_DELETING_DTOR "), ("reinit_nonempty_observed","REINIT_NONEMPTY "), ("reinit_entries_logged","REINIT_ENTRY ")):
                 result[name] = trace.count(marker)
         (WORK / "result.json").write_text(json.dumps(result, indent=2) + "\n")
