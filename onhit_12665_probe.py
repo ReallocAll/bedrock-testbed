@@ -205,6 +205,10 @@ def start_trace(server: Server, folder: Path):
         " set $end = *(unsigned long long*)($rdi+0x128)\n"
         " if $start != 0 && $end > $start && $end - $start <= 8192\n"
         "  set $nonempty_cleanup = $nonempty_cleanup + 1\n"
+        '  if $oldrecord != 0 && $rdi == $oldrecord\n'
+        '   printf "TRACKED_RECORD_CLEANUP record=0x%lx old0=0x%lx old1=0x%lx old2=0x%lx\\n", $rdi, $old0, $old1, $old2\n'
+        '   disable 14\n'
+        '  end\n'
         "  if $nonempty_cleanup <= 160\n"
         '   printf "CLEANUP_NONEMPTY record=0x%lx first=0x%lx count=%lu\\n", $rdi, *(unsigned long long*)$start, ($end-$start)/8\n'
         "  if $end - $start == 24\n"
@@ -247,6 +251,7 @@ def start_trace(server: Server, folder: Path):
         '   set $old1 = *((unsigned long long*)$start+1)\n'
         '   set $old2 = *((unsigned long long*)$start+2)\n'
         '   printf "OLD_TRIPLET record=0x%lx p0=0x%lx v0=0x%lx p1=0x%lx v1=0x%lx p2=0x%lx v2=0x%lx\\n", $oldrecord, $old0, *(unsigned long long*)$old0, $old1, *(unsigned long long*)$old1, $old2, *(unsigned long long*)$old2\n'
+        '   enable 14\n'
         '  end\n'
         " end\n"
         " continue\n"
@@ -264,6 +269,7 @@ def start_trace(server: Server, folder: Path):
         + ' printf "OLD_CHILD_DEALLOC object=0x%lx size=%lu\\n", $rdi, $rsi\n'
         + " continue\n"
         + "end\n"
+        + "disable 14\n"
         + "continue\n",
         encoding="ascii",
     )
