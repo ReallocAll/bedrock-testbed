@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "endstone-combat-probe"
+version = "0.0.1"
+requires-python = ">=3.12"
+
+[project.entry-points."endstone"]
+combat_probe = "combat_probe:CombatProbe"
+
+[tool.setuptools]
+packages = ["combat_probe"]

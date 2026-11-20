@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
+    parser.add_argument("--attack", action="store_true", help="Kill the observed cow only with player attacks")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -56,9 +57,29 @@ def main():
         server = None
         configure(folder / "server.properties", args.transport)
         shutil.rmtree(folder / "worlds", ignore_errors=True)
+        if args.attack:
+            # Passive Endstone listener: differentiate received packet 30 from damage.
+            wheels = work / "wheels"
+            wheels.mkdir()
+            subprocess.run(
+                [str(args.server_python.absolute()), "-m", "pip", "wheel", "--no-deps",
+                 "--wheel-dir", str(wheels), str(ROOT / "combat_probe")],
+                check=True,
+            )
+            plugins = folder / "plugins"
+            plugins.mkdir(exist_ok=True)
+            shutil.copy2(next(wheels.glob("endstone_combat_probe-*.whl")), plugins)
+
         server = Server(args.server_python.absolute(), folder, work / "bds.log")
         server.start()
         server.wait_ready()
+        if args.attack:
+            # Server Ready precedes plugin on_enable; wait for the listener.
+            deadline = time.monotonic() + 10
+            while not any("combat_probe_enabled" in line for line in server.snapshot()):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Combat observer did not enable: {server.snapshot()[-20:]}")
+                time.sleep(0.1)
 
         url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
                else "raknet://127.0.0.1:19132")
@@ -97,7 +118,7 @@ def main():
         until("spawned EndPilotTest")
         result["checks"].append("bds_player_spawned")
         server.command("tp EndPilotTest 0.5 100 0.5")
-        time.sleep(0.8)
+        time.sleep(3.0)  # Allow the high-Y chunk to load before filling the arena.
         filled(server, "fill -8 100 -8 8 106 8 air")
         filled(server, "fill -8 99 -8 8 99 8 grass_block")
         server.command("tp EndPilotTest 0.5 100 0.5")
@@ -118,37 +139,70 @@ def main():
         result["entity_spawn"] = spawn
         result["checks"].append("bds_summon_and_client_typed_spawn_confirmed")
 
-        # The SDK observer must be armed before BDS moves this exact actor.
-        send("6")
-        until("entity_movement_watcher_ready")
-        start = server.command("tp @e[type=cow,x=2,y=100,z=0,r=8] 6 100 0")
-        moved = json.loads(until("entity_movement="))
-        if int(moved["runtime_id"]) != int(spawn["runtime_id"]):
-            raise AssertionError(f"Moved wrong actor: {moved}, expected {spawn}")
-        if moved["x"] is None or abs(float(moved["x"]) - 6.0) >= 1.0:
-            raise AssertionError(f"Client did not observe BDS target coordinate: {moved}")
-        if float(moved["x"]) - float(spawn["position"][0]) < 2:
-            raise AssertionError(f"Actor did not move from its initial position: {spawn}, {moved}")
-        deadline = time.monotonic() + 6
-        while time.monotonic() < deadline:
-            lines = server.snapshot(start)
-            if any("teleported" in line.lower() for line in lines):
-                break
-            time.sleep(0.1)
+        if args.attack:
+            # The cow must remain within normal survival reach while attacking.
+            server.command("gamemode survival EndPilotTest")
+            server.command("effect @e[type=cow] slowness 60 255 true")
+            time.sleep(0.5)
+            result["checks"].append("survival_actor_within_reach")
         else:
-            raise AssertionError(f"BDS did not confirm entity teleport: {server.snapshot(start)}")
-        result["entity_movement"] = moved
-        result["checks"].append("bds_teleport_and_matching_runtime_id_move_confirmed")
-
-        send("watch_remove")
-        until("entity_removal_watcher_ready")
-        start = server.command("kill @e[type=cow,x=2,y=100,z=0,r=8]")
-        removed = json.loads(until("entity_removed="))
-        if removed["entity_id"] != spawn["entity_id"]:
-            raise AssertionError(f"Removed wrong server entity: {removed}, expected {spawn}")
-        if not any("killed" in line.lower() for line in server.snapshot(start)):
-            raise AssertionError(f"BDS did not confirm kill: {server.snapshot(start)}")
-        result["checks"].append("bds_kill_and_matching_unique_id_removal_confirmed")
+            # The SDK observer must be armed before BDS moves this exact actor.
+            send("6")
+            until("entity_movement_watcher_ready")
+            start = server.command("tp @e[type=cow,x=2,y=100,z=0,r=8] 6 100 0")
+            moved = json.loads(until("entity_movement="))
+            if int(moved["runtime_id"]) != int(spawn["runtime_id"]):
+                raise AssertionError(f"Moved wrong actor: {moved}, expected {spawn}")
+            if moved["x"] is None or abs(float(moved["x"]) - 6.0) >= 1.0:
+                raise AssertionError(f"Client did not observe BDS target coordinate: {moved}")
+            if float(moved["x"]) - float(spawn["position"][0]) < 2:
+                raise AssertionError(f"Actor did not move from its initial position: {spawn}, {moved}")
+            deadline = time.monotonic() + 6
+            while time.monotonic() < deadline:
+                lines = server.snapshot(start)
+                if any("teleported" in line.lower() for line in lines):
+                    break
+                time.sleep(0.1)
+            else:
+                raise AssertionError(f"BDS did not confirm entity teleport: {server.snapshot(start)}")
+            result["entity_movement"] = moved
+            result["checks"].append("bds_teleport_and_matching_runtime_id_move_confirmed")
+        
+        send("attack" if args.attack else "watch_remove")
+        if args.attack:
+            attacks = int(until("attacks_submitted=", timeout=15))
+            if attacks != 1:
+                raise AssertionError(f"Expected one submitted player attack, got {attacks}")
+            # Packet receipt and damage come from passive BDS events, not SDK echo.
+            deadline = time.monotonic() + 10
+            while True:
+                lines = server.snapshot()
+                received = [line for line in lines if "combat_packet_received=" in line]
+                damaged = [line for line in lines if (
+                    "combat_damage=Cow:" in line
+                    and "attacker=EndPilotTest" in line
+                )]
+                if received and damaged:
+                    break
+                if time.monotonic() > deadline:
+                    raise AssertionError(
+                        f"BDS attack packet/damage not confirmed: received={received}, "
+                        f"damage={damaged}, recent={lines[-12:]}"
+                    )
+                time.sleep(0.1)
+            result["attacks_submitted"] = attacks
+            result["server_attack_packets"] = len(received)
+            result["server_damage_events"] = damaged
+            result["checks"].append("bds_received_single_player_attack_and_cow_damage")
+        else:
+            until("entity_removal_watcher_ready")
+            start = server.command("kill @e[type=cow,x=2,y=100,z=0,r=8]")
+            removed = json.loads(until("entity_removed="))
+            if removed["entity_id"] != spawn["entity_id"]:
+                raise AssertionError(f"Removed wrong server entity: {removed}, expected {spawn}")
+            if not any("killed" in line.lower() for line in server.snapshot(start)):
+                raise AssertionError(f"BDS did not confirm kill: {server.snapshot(start)}")
+            result["checks"].append("bds_kill_and_matching_unique_id_removal_confirmed")
         send("close")
         until("disconnected EndPilotTest")
         if client.wait(timeout=10) != 0:

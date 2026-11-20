@@ -233,12 +233,13 @@ jobs:
 
   network_settings:
     if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.position_probe || inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.identity_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || inputs.health_probe || inputs.hotbar_probe || inputs.mining_probe || inputs.pickup_probe)
-    name: EndPilot (settings / ${{ matrix.transport }})
+    name: EndPilot (settings / ${{ matrix.transport }} / ${{ matrix.entity_scene }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         transport: ${{ fromJSON((inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || inputs.health_probe || inputs.hotbar_probe || inputs.mining_probe || inputs.pickup_probe) && '["nethernet","raknet"]' || '["nethernet"]') }}
+        entity_scene: ${{ fromJSON(inputs.entity_probe && '["observe","attack"]' || '["observe"]') }}
     timeout-minutes: 30
     env:
       ENDPILOT_COMMIT: ${{ inputs.endpilot_commit }}
@@ -376,7 +377,7 @@ jobs:
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --transport "${{ matrix.transport }}"
       - name: Verify actor spawn, movement and removal on the live client
-        if: inputs.entity_probe
+        if: inputs.entity_probe && matrix.entity_scene == 'observe'
         shell: bash
         run: |
           .venv-client/bin/python nethernet_entity_probe.py \
@@ -384,6 +385,15 @@ jobs:
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --probe endpilot-src/examples/observe_entity.py \
             --transport "${{ matrix.transport }}"
+      - name: Verify player attack against live BDS actor
+        if: inputs.entity_probe && matrix.entity_scene == 'attack'
+        shell: bash
+        run: |
+          .venv-client/bin/python nethernet_entity_probe.py \
+            --server-python .venv-server/bin/python \
+            --endpilot-commit "$ENDPILOT_COMMIT" \
+            --probe endpilot-src/examples/attack_entity.py \
+            --transport "${{ matrix.transport }}" --attack
       - name: Verify player health changes after real BDS damage
         if: inputs.health_probe
         shell: bash
@@ -434,7 +444,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-bds-endpilot-network-settings-${{ matrix.transport }}
+          name: real-bds-endpilot-network-settings-${{ matrix.transport }}-${{ matrix.entity_scene }}
           path: |
             work/result.json
             work/bds.log
