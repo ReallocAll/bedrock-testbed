@@ -1,0 +1,78 @@
+name: Control BDS 1.26.65 startup on unmodified Endstone v0.11
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  startup-control:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ReallocAll/endstone
+          ref: 284fe0a8024f8c2dbb4b9ea89f81adbd93b940e1
+          path: endstone-src
+          fetch-depth: 0
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: ./endstone-src/.github/actions/setup-clang
+      - name: Build and install the unmodified source base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C endstone-src rev-parse HEAD)" = 284fe0a8024f8c2dbb4b9ea89f81adbd93b940e1
+          sudo apt-get install -y --no-install-recommends libelf-dev binutils
+          python -m pip install conan ninja
+          python -m venv .venv-server
+          .venv-server/bin/python -m pip install -v ./endstone-src
+          .venv-server/bin/python -m pip install 'git+https://github.com/ReallocAll/endstone-bot.git@4bd0691f1ef0f551e5ba258d4747b35a3b748177'
+          .venv-server/bin/python -m pip check
+      - name: Verify initial startup on exact target BDS
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from importlib.metadata import version
+          import subprocess
+          from server import Server
+          from pathlib import Path
+          work = Path("work-onhit-control").absolute()
+          work.mkdir(exist_ok=True)
+          pyexe = (Path(".venv-server/bin/python")).absolute()
+          v = subprocess.check_output([str(pyexe), "-c", "import importlib.metadata as m; print(m.version('endstone'))"], text=True).strip()
+          print("UNMODIFIED_SOURCE_ENDSTONE_VERSION", v, flush=True)
+          server = Server(pyexe, work / "server", work / "bds.log", expected_endstone=v, expected_bds="26.65")
+          try:
+              server.start()
+              server.wait_ready(timeout=90)
+              print("UNMODIFIED_SOURCE_FIRST_BOOT_PASS", flush=True)
+          finally:
+              try:
+                  server.stop()
+              except Exception as exc:
+                  print("SHUTDOWN_ERROR", type(exc).__name__, str(exc), flush=True)
+          PY
+      - name: Print runtime logs
+        if: always()
+        run: |
+          if test -f work-onhit-control/bds.log; then tail -n 60 work-onhit-control/bds.log; fi
+      - name: Preserve startup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onhit-12665-unmodified-source-startup
+          path: |
+            work-onhit-control/bds.log
+            work-onhit-control/server/version.txt
+          if-no-files-found: warn
+          retention-days: 14
