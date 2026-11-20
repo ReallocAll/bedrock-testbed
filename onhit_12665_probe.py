@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-from importlib.metadata import version as distribution_version
+import os
 import json
 import re
 import shutil
@@ -17,7 +17,7 @@ from server import ROOT, Server, configure
 
 WORK = ROOT / "work-onhit65"
 BDS = "26.65"
-ENDSTONE = distribution_version("endstone")
+ENDSTONE = os.environ.get("ENDSTONE_TEST_VERSION", "0.11.16")
 BOT = "OnHitTarget"
 
 
