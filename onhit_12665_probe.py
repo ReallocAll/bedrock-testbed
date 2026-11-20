@@ -474,6 +474,11 @@ def main():
         # ProjectileComponent to the Nether using the built-in execute/tp path.
         # A successful command alone is not proof of a dimension transfer.
         command_confirm(
+            server, f"bot moveat {BOT} 8 82 8 nether",
+            f"已移动 {BOT}", 25,
+        )
+        time.sleep(3)
+        command_confirm(
             server,
             "execute in nether run tickingarea add circle 8 80 8 2 onhit_nether_zone",
             "Added", 15,
@@ -499,6 +504,8 @@ def main():
             "ONHIT_NETHER_PROJECTILE", 15,
         )
         result["checks"].append("projectile_dimension_transfer_to_nether")
+        command_confirm(server, f"bot moveat {BOT} 8 221 8 overworld",
+                        f"已移动 {BOT}", 25)
         # Test an entity-bearing save/restore path, not just in-place spawns.
         # The saved volume contains the newly summoned arrows and mobs.
         command_confirm(server,
