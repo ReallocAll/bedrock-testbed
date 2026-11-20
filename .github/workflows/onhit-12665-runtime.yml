@@ -1,8 +1,8 @@
-name: Isolated BDS 1.26.65 OnHit Runtime candidate
+name: Isolated BDS 1.26.65 source release baseline
 
 on:
   push:
-    branches: [test/onhit-12665-runtime]
+    branches: [test/onhit-12665-tag-source]
   workflow_dispatch:
 
 permissions:
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ReallocAll/endstone
-          ref: 1fad28dccf2b8ce9c4d8752a5c55d3c38950a589
+          ref: 23cb5758bdc070888cb89ecd1541ef25c4305b5c
           path: endstone-src
           fetch-depth: 0
           submodules: true
@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C endstone-src rev-parse HEAD)" = 1fad28dccf2b8ce9c4d8752a5c55d3c38950a589
+          test "$(git -C endstone-src rev-parse HEAD)" = 23cb5758bdc070888cb89ecd1541ef25c4305b5c
           sudo apt-get install -y --no-install-recommends libelf-dev gdb binutils
           python -m pip install conan ninja
           python -m venv .venv-server
