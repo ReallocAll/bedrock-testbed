@@ -125,6 +125,10 @@ def main():
         server_has("successfully found", start)
         result["checks"].append("bds_chest_block_confirmed")
 
+        start = server.command("replaceitem block 1 100 0 slot.container 0 dirt 4")
+        server_has("replaced", start)
+        result["checks"].append("bds_populated_chest_slot_zero")
+
         send("open")
         opened = json.loads(until("container_opened="))
         assert opened["position"] == [1, 100, 0], opened
@@ -133,6 +137,13 @@ def main():
         result["server_window"] = opened
         result["checks"].append("server_confirmed_chest_window_open")
         server.wait_player(True)
+        contents = json.loads(until("container_slots="))
+        assert contents["count"] == 27, contents
+        assert len(contents["nonempty"]) == 1, contents
+        item = contents["nonempty"][0]
+        assert item["slot"] == 0 and item["item_id"] > 0 and item["stack_size"] == 4, contents
+        result["server_chest_contents"] = contents
+        result["checks"].append("server_confirmed_chest_slots")
 
         send("close_window")
         closed = json.loads(until("container_closed="))
