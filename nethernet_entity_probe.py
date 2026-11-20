@@ -57,9 +57,26 @@ def main():
         server = None
         configure(folder / "server.properties", args.transport)
         shutil.rmtree(folder / "worlds", ignore_errors=True)
+        if args.attack:
+            # Passive Endstone listener: differentiate received packet 30 from damage.
+            wheels = work / "wheels"
+            wheels.mkdir()
+            subprocess.run(
+                [str(args.server_python.absolute()), "-m", "pip", "wheel", "--no-deps",
+                 "--wheel-dir", str(wheels), str(ROOT / "combat_probe")],
+                check=True,
+            )
+            plugins = folder / "plugins"
+            plugins.mkdir(exist_ok=True)
+            shutil.copy2(next(wheels.glob("endstone_combat_probe-*.whl")), plugins)
+
         server = Server(args.server_python.absolute(), folder, work / "bds.log")
         server.start()
         server.wait_ready()
+        if args.attack:
+            assert any("combat_probe_enabled" in line for line in server.snapshot()), (
+                "Endstone combat observer not enabled", server.snapshot()[-20:]
+            )
 
         url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
                else "raknet://127.0.0.1:19132")
@@ -152,6 +169,11 @@ def main():
         until("entity_removal_watcher_ready")
         if args.attack:
             attacks = int(until("attacks_submitted=", timeout=40))
+            # PacketReceiveEvent and ActorDamageEvent remain independent BDS oracles.
+            seen = [line for line in server.snapshot() if "combat_packet_received=" in line]
+            hits = [line for line in server.snapshot() if "combat_damage=" in line]
+            result["server_attack_packets"] = len(seen)
+            result["server_damage_events"] = hits
             assert attacks > 0, "Client did not submit any attacks"
             removed = json.loads(until("entity_removed="))
             assert removed["entity_id"] == spawn["entity_id"], removed
