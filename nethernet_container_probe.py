@@ -183,6 +183,12 @@ def main():
         server.wait_player(True)
 
         if args.equip:
+            screen = json.loads(until("player_inventory_opened="))
+            assert isinstance(screen["id"], int) and screen["id"] >= 0, screen
+            assert isinstance(screen["type"], str) and screen["type"], screen
+            result["player_inventory_window"] = screen
+            result["checks"].append("server_confirmed_player_inventory_open")
+
             equipped = json.loads(until("armor_equip_response="))
             assert equipped["request_id"] < 0 and equipped["request_id"] % 2 != 0, equipped
             assert equipped["request_id"] != transfer["request_id"], equipped
@@ -191,6 +197,10 @@ def main():
             assert equipped["armor_count"] == 1 and equipped["inventory_count"] == 0, equipped
             result["armor_equip"] = equipped
             result["checks"].append("server_accepted_helmet_equip_and_slot_corrections")
+            closed_screen = json.loads(until("player_inventory_closed="))
+            assert closed_screen["id"] == screen["id"], (closed_screen, screen)
+            assert closed_screen["open_window"] is False, closed_screen
+            result["checks"].append("server_confirmed_player_inventory_close")
 
             # Verify the actual armor slot independently from the packet response.
             server.command(
