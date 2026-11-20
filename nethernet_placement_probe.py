@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--kick", action="store_true", help="Assert a BDS kick after placement")
+    parser.add_argument("--timeout", action="store_true", help="Assert block wait times out while BDS stays connected")
     args = parser.parse_args()
     work = ROOT / "work"
     if work.exists():
@@ -90,7 +91,8 @@ def main():
                else "raknet://127.0.0.1:19132")
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url, "--name", "EndPilotTest"]
-            + (["--expect-kick"] if args.kick else []),
+            + (["--expect-kick"] if args.kick else [])
+            + (["--check-timeout"] if args.timeout else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -155,6 +157,13 @@ def main():
         ), targets
         result["target_air_runtime_ids"] = targets
         result["checks"].append("client_observed_initial_air_targets")
+
+        if args.timeout:
+            input_line("timeout")
+            timed_out = json.loads(until("block_wait_timeout=").partition("block_wait_timeout=")[2])
+            assert timed_out["position"] == [2, 100, 0], timed_out
+            server.wait_player(True)
+            result["checks"].append("unchanged_block_wait_timed_out_while_player_online")
 
         server.command("replaceitem entity EndPilotTest slot.hotbar 0 gold_block 8")
         time.sleep(0.4)
