@@ -121,7 +121,7 @@ def main():
 
         for slot, item in ((0, "stone"), (2, "iron_pickaxe")):
             send("select")
-            chosen = int(until("selected_hotbar_slot="))
+            chosen = int(until("hotbar_selection_submitted="))
             if chosen != slot:
                 raise AssertionError(f"SDK selected {chosen} instead of {slot}")
             expect_mainhand(item)
