@@ -112,7 +112,7 @@ def main():
             raise AssertionError(f"Unexpected server actor: {spawn}")
         if abs(float(spawn["position"][0]) - 2.5) > 3:
             raise AssertionError(f"Actor not spawned near target: {spawn}")
-        if not any("summon" in line.lower() and "cow" in line.lower()
+        if not any("successfully summoned" in line.lower()
                    for line in server.snapshot(start)):
             raise AssertionError(f"BDS did not confirm summoning: {server.snapshot(start)}")
         result["entity_spawn"] = spawn
