@@ -28,6 +28,7 @@ jobs:
         with:
           python-version: '3.13'
       - uses: ./endstone-src/.github/actions/setup-clang
+      - uses: astral-sh/setup-uv@v5
       - name: Build and install the unmodified source base
         shell: bash
         run: |
