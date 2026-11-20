@@ -118,7 +118,8 @@ def main() -> int:
                         print("[refused] " + completed.stdout.strip(), flush=True)
                     if completed.stderr:
                         print(completed.stderr, file=sys.stderr, flush=True)
-                    if completed.returncode or "login_refused=LoginRefused" not in completed.stdout:
+                    if (completed.returncode or "login_refused=LoginRefused" not in completed.stdout
+                            or "DisconnectFailReason.SERVER_FULL" not in completed.stdout):
                         raise AssertionError(
                             f"Expected explicit BDS login refusal, got exit={completed.returncode}: "
                             f"{completed.stdout} {completed.stderr}"
