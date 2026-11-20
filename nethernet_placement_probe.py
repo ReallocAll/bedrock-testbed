@@ -139,6 +139,21 @@ def main():
         result["support_runtime_ids"] = supports
         result["checks"].append("client_observed_actual_support_blocks")
 
+        # Discover the target's air runtime ID on the client before either placement.
+        for x in (2, 3):
+            server.command(f"setblock {x} 100 0 stone")
+        time.sleep(0.5)
+        input_line("baseline")
+        until("target_watchers_ready")
+        for x in (2, 3):
+            server.command(f"setblock {x} 100 0 air")
+        targets = json.loads(until("targets_observed=").partition("targets_observed=")[2])
+        assert len(targets) == 2 and all(
+            int(targets[i]) != int(supports[i]) for i in range(2)
+        ), targets
+        result["target_air_runtime_ids"] = targets
+        result["checks"].append("client_observed_initial_air_targets")
+
         server.command("replaceitem entity EndPilotTest slot.hotbar 0 gold_block 8")
         time.sleep(0.4)
         for x, cancelled, expected in ((2, 1, "air"), (3, 0, "gold_block")):
@@ -154,11 +169,10 @@ def main():
             update = json.loads(client_line.partition("placement_update=")[2])
             assert update["x"] == x and update["layer"] == 0, update
             if cancelled:
-                # The rejected target must not appear as the gold block observed on its support.
-                assert update["runtime_id"] != supports[0], update
+                assert update["runtime_id"] == targets[0] and update["effect"] == "unchanged", update
                 result["cancelled_update"] = update
             else:
-                assert update["runtime_id"] == supports[1], update
+                assert update["runtime_id"] == supports[1] and update["effect"] == "placed", update
                 result["allowed_update"] = update
             result["checks"].append(
                 "endstone_cancel_and_bds_air" if cancelled else "endstone_allow_bds_gold_and_client_update"
