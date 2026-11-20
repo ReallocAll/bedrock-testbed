@@ -86,7 +86,7 @@ def remaining_deleting_destructor_breakpoints(bias: int) -> str:
         f"break *0x{bias + ea:x}\n"
         f"commands {number}\n"
         " silent\n"
-        f' printf "OTHER_DELETING_DTOR type={name} object=0x%lx\\n", $rdi\n'
+        f' printf "OTHER_DELETING_DTOR stage=%d type={name} object=0x%lx\\n", $watch_stage, $rdi\n'
         " continue\n"
         "end\n"
         for number, (name, ea) in enumerate(entries, 6)
@@ -238,7 +238,7 @@ def start_trace(server: Server, folder: Path):
         f"break *0x{bias + 0x71729B0:x}\n"
         "commands 3\n"
         " silent\n"
-        ' printf "IMPACT_DELETING_DTOR object=0x%lx\\n", $rdi\n'
+        ' printf "IMPACT_DELETING_DTOR stage=%d object=0x%lx\\n", $watch_stage, $rdi\n'
         " continue\n"
         "end\n"
         f"break *0x{bias + 0x7143B40:x}\n"
@@ -549,8 +549,8 @@ def main():
 
         old = triplet(r"OLD_TRIPLET record=0x[0-9a-f]+ p0=0x([0-9a-f]+) v0=.*? p1=0x([0-9a-f]+) v1=.*? p2=0x([0-9a-f]+) v2=")
         final = triplet(r"FINAL_TRIPLET record=0x[0-9a-f]+ p0=0x([0-9a-f]+) p1=0x([0-9a-f]+) p2=0x([0-9a-f]+)")
-        if len(set(old + final)) != 6:
-            raise RuntimeError("Old and replacement children not distinct by address in observed generation")
+        if len(set(old)) != 3 or len(set(final)) != 3:
+            raise RuntimeError("Expected three distinct owned children at each recorded site")
         deallocated = {
             stage: [int(address, 16) for address in re.findall(
                 rf"WATCHED_CHILD_DEALLOC stage={stage} object=0x([0-9a-f]+)", trace
@@ -562,15 +562,17 @@ def main():
                 raise RuntimeError(
                     f"Native deallocation mismatch stage={stage}: expected={expected}, observed={deallocated[stage]}"
                 )
-        destroyed = [
-            int(address, 16) for address in re.findall(
-                r"(?:IMPACT_DELETING_DTOR|OTHER_DELETING_DTOR type=[A-Za-z]+) object=0x([0-9a-f]+)",
-                trace,
-            )
-        ]
-        for address in old + final:
-            if destroyed.count(address) != 1:
-                raise RuntimeError(f"Child 0x{address:x} has {destroyed.count(address)} deleting-destructor events")
+        for stage, expected in ((1, old), (2, final)):
+            destroyed = [
+                int(address, 16) for address in re.findall(
+                    rf"(?:IMPACT_DELETING_DTOR stage={stage}|OTHER_DELETING_DTOR stage={stage} type=[A-Za-z]+) object=0x([0-9a-f]+)",
+                    trace,
+                )
+            ]
+            if sorted(destroyed) != sorted(expected):
+                raise RuntimeError(
+                    f"Deleting-destructor mismatch stage={stage}: expected={expected}, observed={destroyed}"
+                )
         result["old_children_deallocated_once"] = len(old)
         result["replacement_children_deallocated_once"] = len(final)
         result["checks"].append("old_and_replacement_children_destroyed_and_deallocated_once")
