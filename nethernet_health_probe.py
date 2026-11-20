@@ -97,6 +97,8 @@ def main():
         until("spawned EndPilotTest")
         result["checks"].append("bds_player_spawned")
         # Keep the survival player stable and on solid ground before damage.
+        server.command("tp EndPilotTest 0.5 100 0.5")
+        time.sleep(0.7)
         filled(server, "fill -8 99 -8 8 99 8 grass_block")
         server.command("tp EndPilotTest 0.5 100 0.5")
         server.command("gamemode survival EndPilotTest")
