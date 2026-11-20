@@ -43,6 +43,7 @@ def main() -> int:
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--join", action="store_true")
     parser.add_argument("--position", action="store_true")
+    parser.add_argument("--chat", action="store_true", help="Verify two BDS players exchange chat")
     parser.add_argument("--refused", action="store_true", help="Require explicit full-server rejection")
     parser.add_argument("--transport", choices=("nethernet", "raknet"), default="nethernet")
     args = parser.parse_args()
@@ -135,6 +136,48 @@ def main() -> int:
                 results["checks"].append("holder_left_bds_list_empty")
 
             asyncio.run(run_full_server_probe())
+        elif args.chat:
+            process = subprocess.Popen(
+                command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    online, lines = server.player_online()
+                    text = "\n".join(lines)
+                    counts = [int(m.group(1)) for line in lines
+                              if (m := re.search(r"there are\s+(\d+)\s*(?:/|of a max of)\s*\d+\s+players?\s+online", line, re.I))]
+                    if online and counts and counts[-1] == 2 and "EndPilotObserver" in text:
+                        break
+                    if process.poll() is not None:
+                        raise AssertionError("chat example exited before two BDS players joined")
+                    time.sleep(0.2)
+                else:
+                    raise TimeoutError("BDS did not list both chat players")
+                results["checks"].append("both_chat_players_in_bds_list")
+                process.stdin.write("go\n")
+                process.stdin.flush()
+                stdout, stderr = process.communicate(timeout=35)
+                if stdout:
+                    print("[chat] " + stdout.strip(), flush=True)
+                if stderr:
+                    print(stderr, file=sys.stderr, flush=True)
+                match = re.search(r"^chat_received=(.+)$", stdout, re.M)
+                if process.returncode or not match:
+                    raise AssertionError(f"Chat example did not complete: {stdout} {stderr}")
+                observed = json.loads(match.group(1))
+                expected = {"author": "EndPilotTest", "message": "endpilot-chat-roundtrip"}
+                if observed != expected or "both_disconnected" not in stdout:
+                    raise AssertionError(f"Unexpected chat relay or disconnect: {stdout}")
+                results["chat"] = observed
+                results["checks"].append("server_relayed_player_chat_to_second_sdk_bot")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
+            server.wait_player(False, timeout=20)
+            results["checks"].append("chat_players_left_bds_list_empty")
         elif args.join or args.position:
             command += ["--name", "EndPilotTest", "--hold", "2" if args.position else "15"]
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
