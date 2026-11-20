@@ -71,7 +71,7 @@ on:
         type: boolean
         default: false
       entity_probe:
-        description: 'Observe server-summoned cow spawn and removal via SDK packets'
+        description: 'Observe server-summoned cow spawn, movement and removal via SDK packets'
         required: false
         type: boolean
         default: false
@@ -288,7 +288,7 @@ jobs:
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --probe endpilot-src/examples/command.py \
             --transport "${{ matrix.transport }}" --command
-      - name: Verify actor spawn and removal on the live client
+      - name: Verify actor spawn, movement and removal on the live client
         if: inputs.entity_probe
         shell: bash
         run: |
