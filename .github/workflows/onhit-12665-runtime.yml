@@ -1,8 +1,8 @@
-name: Isolated BDS 1.26.65 patched Runtime with release allocator
+name: Isolated BDS 1.26.65 official allocator injection
 
 on:
   push:
-    branches: [test/onhit-12665-published-allocator]
+    branches: [test/onhit-12665-official-allocator]
   workflow_dispatch:
 
 permissions:
@@ -41,53 +41,58 @@ jobs:
           .venv-server/bin/python -m pip install 'git+https://github.com/ReallocAll/endstone-bot.git@4bd0691f1ef0f551e5ba258d4747b35a3b748177'
           .venv-server/bin/python -m pip check
           .venv-server/bin/python -c 'import importlib.metadata as m; print("PATCHED_ENDSTONE_VERSION",m.version("endstone"))'
-      - name: Install published 0.11.16 allocator only
+      - name: Install official precompiled mimalloc 3.5.1
         shell: bash
         run: |
           set -euo pipefail
-          .venv-server/bin/python -m pip download --no-deps --only-binary=:all: 'endstone==0.11.16' -d wheelhouse-release
-          .venv-server/bin/python - <<'PY'
+          url=https://github.com/microsoft/mimalloc/releases/download/v3.5.1/mimalloc-v3.5.1-linux-x64.tar.gz
+          mkdir -p external-mimalloc
+          curl --fail --location --retry 3 --silent --show-error "$url" -o external-mimalloc/official.tar.gz
+          echo "3d9cfe526589d77171e0b39b16fa202391045f880002723cf71dd525a9158f12  external-mimalloc/official.tar.gz" | sha256sum --check
+          tar -xzf external-mimalloc/official.tar.gz -C external-mimalloc
+          python - <<'PY'
+          import os
           from pathlib import Path
-          import hashlib
-          import subprocess
-          import zipfile
-
-          root = Path.cwd()
-          pyexe = (root / ".venv-server/bin/python").absolute()
-          installed = Path(subprocess.check_output(
-              [str(pyexe), "-c", "from pathlib import Path; import endstone; print(Path(endstone.__file__).parent)"],
-              text=True
-          ).strip())
-          target = installed / "libmimalloc.so"
-          wheel, = (root / "wheelhouse-release").glob("endstone-0.11.16-*.whl")
-          with zipfile.ZipFile(wheel) as archive:
-              released = archive.read("endstone/libmimalloc.so")
-              vendored = [name for name in archive.namelist()
-                          if name.startswith("endstone.libs/") and not name.endswith("/")]
-              for name in vendored:
-                  dep = installed.parent / name
-                  dep.parent.mkdir(parents=True, exist_ok=True)
-                  dep.write_bytes(archive.read(name))
-              print("PUBLISHED_MIMALLOC_VENDOR_LIBS", vendored, flush=True)
-          print("MIMALLOC_SOURCE_SHA256", hashlib.sha256(target.read_bytes()).hexdigest(), flush=True)
-          print("MIMALLOC_RELEASE_SHA256", hashlib.sha256(released).hexdigest(), flush=True)
-          target.write_bytes(released)
-          assert hashlib.sha256(target.read_bytes()).digest() == hashlib.sha256(released).digest()
-          print("PUBLISHED_MIMALLOC_INSTALLED_FOR_PATCHED_RUNTIME", flush=True)
+          root = Path.cwd() / "external-mimalloc"
+          candidates = [p for p in root.rglob("libmimalloc.so*") if p.is_file()]
+          candidates = [p for p in candidates if "debug" not in str(p).lower() and "secure" not in str(p).lower()]
+          if not candidates:
+              raise RuntimeError("Official release archive has no standard libmimalloc.so")
+          candidates.sort(key=lambda p: (p.name != "libmimalloc.so", len(str(p))))
+          selected = candidates[0].resolve(strict=True)
+          print("OFFICIAL_MIMALLOC_PRELOAD", selected, flush=True)
+          print("OFFICIAL_MIMALLOC_CANDIDATES", [str(p.relative_to(root)) for p in candidates[:12]], flush=True)
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"ONHIT_EXTERNAL_ALLOCATOR={selected}\n")
           PY
-      - name: Trace actual deletion on patched Linux BDS
+      - name: Trace OnHit with upstream mimalloc (not Endstone bundled)
+        id: upstream_mimalloc
         shell: bash
         run: |
+          set -euo pipefail
           python -m py_compile server.py onhit_12665_probe.py
           ENDSTONE_TEST_VERSION="$(.venv-server/bin/python -c 'import importlib.metadata as m; print(m.version("endstone"))')" \
-            python onhit_12665_probe.py --server-python .venv-server/bin/python
-      - name: Diagnose early native startup failure
-        if: failure()
+            python - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          allocator = Path(os.environ["ONHIT_EXTERNAL_ALLOCATOR"]).resolve(strict=True)
+          # Match the production launcher: set LD_PRELOAD after Python starts,
+          # so it applies to the spawned BDS and Endstone appends its runtime.
+          os.environ["LD_PRELOAD"] = str(allocator)
+          os.environ.pop("MALLOC_CONF", None)
+          sys.argv = ["onhit_12665_probe.py", "--server-python", ".venv-server/bin/python"]
+          from onhit_12665_probe import main
+          main()
+          PY
+      - name: Diagnose upstream-mimalloc startup failure
+        if: steps.upstream_mimalloc.outcome == 'failure'
         shell: bash
         run: |
           set -u
           python - <<'PY'
           from pathlib import Path
+          import os
           import subprocess
           import sysconfig
           pyexe = (Path.cwd() / ".venv-server/bin/python").absolute()
@@ -112,7 +117,7 @@ jobs:
               "set print thread-events off",
               "set disable-randomization off",
               "handle SIGPIPE nostop noprint pass",
-              f"set environment LD_PRELOAD {runtime.parent / 'libmimalloc.so'}:{runtime}",
+              f"set environment LD_PRELOAD {os.environ['ONHIT_EXTERNAL_ALLOCATOR']}:{runtime}",
               f"set environment LD_LIBRARY_PATH {libdir}",
               f"set environment ENDSTONE_PYTHON_EXECUTABLE {pyexe}",
               f"set environment PYTHONPATH {pythonpath}",
@@ -131,6 +136,27 @@ jobs:
                                     stderr=subprocess.STDOUT, timeout=120, check=False)
           print("Diagnostic GDB returncode:", proc.returncode)
           print((Path.cwd() / "work-onhit65/startup-gdb.log").read_text(errors="replace")[-12000:])
+          PY
+      - name: Try system jemalloc if official mimalloc fails
+        if: steps.upstream_mimalloc.outcome == 'failure'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -d work-onhit65; then mv work-onhit65 work-onhit65-upstream-mimalloc; fi
+          sudo apt-get install -y --no-install-recommends libjemalloc2
+          allocator="$(ldconfig -p | awk '/libjemalloc.so.2 / {print $NF; exit}')"
+          test -f "$allocator"
+          export ONHIT_EXTERNAL_ALLOCATOR="$allocator"
+          echo "JEMALLOC_FALLBACK_PRELOAD=$allocator"
+          ENDSTONE_TEST_VERSION="$(.venv-server/bin/python -c 'import importlib.metadata as m; print(m.version("endstone"))')" \
+            python - <<'PY'
+          import os
+          import sys
+          os.environ["LD_PRELOAD"] = os.environ["ONHIT_EXTERNAL_ALLOCATOR"]
+          os.environ.pop("MALLOC_CONF", None)
+          sys.argv = ["onhit_12665_probe.py", "--server-python", ".venv-server/bin/python"]
+          from onhit_12665_probe import main
+          main()
           PY
       - name: Print decisive events
         if: always()
@@ -152,5 +178,9 @@ jobs:
             work-onhit65/ownership-gdb.log
             work-onhit65/bds.log
             work-onhit65/server/version.txt
+            work-onhit65-upstream-mimalloc/result.json
+            work-onhit65-upstream-mimalloc/startup-gdb.log
+            work-onhit65-upstream-mimalloc/ownership-gdb.log
+            work-onhit65-upstream-mimalloc/bds.log
           if-no-files-found: warn
           retention-days: 14
