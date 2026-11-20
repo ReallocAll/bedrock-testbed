@@ -166,6 +166,11 @@ def main():
             send("place")
             submitted = json.loads(until("placement_submitted="))
             assert submitted["tick"] > 0, submitted
+            block = json.loads(until("placement_block=", timeout=10))
+            assert block["position"] == [2, 100, 1] and block["runtime_id"] != 0xDBF44120, block
+            result["client_placement_block"] = block
+            server_has("successfully found", server.command("testforblock 2 100 1 dirt"))
+            result["checks"].append("bds_placed_collected_dirt")
             placed = json.loads(until("placement_update=", timeout=20))
             assert placed["position"] == [2, 100, 1], placed
             assert placed["runtime_id"] != 0xDBF44120, placed
@@ -173,9 +178,6 @@ def main():
             assert placed["inventory_after"] == placed["inventory_before"] - 1, placed
             result["placement"] = {"submitted": submitted, "observed": placed}
             result["checks"].append("client_received_placement_and_inventory_decrement")
-            server_has("successfully found", server.command("testforblock 2 100 1 dirt"))
-            result["checks"].append("bds_placed_collected_dirt")
-
         send("close")
         until("disconnected EndPilotTest")
         assert client.wait(timeout=10) == 0
