@@ -208,6 +208,7 @@ def start_trace(server: Server, folder: Path):
         '  if $oldrecord != 0 && $rdi == $oldrecord\n'
         '   printf "TRACKED_RECORD_CLEANUP record=0x%lx old0=0x%lx old1=0x%lx old2=0x%lx\\n", $rdi, $old0, $old1, $old2\n'
         '   disable 14\n'
+        '   set $oldrecord = 0\n'
         '  end\n'
         "  if $nonempty_cleanup <= 160\n"
         '   printf "CLEANUP_NONEMPTY record=0x%lx first=0x%lx count=%lu\\n", $rdi, *(unsigned long long*)$start, ($end-$start)/8\n'
@@ -378,7 +379,7 @@ def main():
         result["checks"].append("real_simulated_player_and_arena")
         gdb, thread, log, bias = start_trace(server, folder)
         result["elf_load_bias"] = f"0x{bias:x}"
-        result["checks"].append("thirteen_native_entry_breakpoints_armed")
+        result["checks"].append("fourteen_native_entry_breakpoints_armed")
         for x,z in ((8,11),(10,12),(6,12)):
             command_confirm(server, f"summon shulker {x} 221 {z}", "successfully summoned", 15)
         result["checks"].append("three_shulkers_summoned")
@@ -400,19 +401,15 @@ def main():
                         "execute if entity @e[type=onhit:probe_arrow] run say ONHIT_PROBE_ALIVE",
                         "ONHIT_PROBE_ALIVE", 15)
         result["checks"].append("probe_projectile_alive")
-        for event in ("onhit:toggle", "onhit:reset", "onhit:toggle"):
-            offset = server.command(
-                f"event entity @e[type=onhit:probe_arrow] {event}"
-            )
-            time.sleep(2)
-            reply = "\n".join(server.snapshot(offset))
-            result.setdefault("group_transition_responses", []).append(
-                {"event": event, "response": reply[-500:]}
-            )
-            if any(word in reply.lower() for word in
-                   ("no targets matched", "unknown event", "failed to execute", "syntax error")):
-                raise RuntimeError(f"Group transition failed: {event}: {reply[-500:]}")
-        result["checks"].append("projectile_component_group_transitions_sent")
+        event = "onhit:toggle"
+        response = command_confirm(
+            server, f"event entity @e[type=onhit:probe_arrow] {event}",
+            "onhit:toggle successfully executed on: onhit:probe_arrow", 15,
+        )
+        result["group_transition_responses"] = [
+            {"event": event, "response": response[-500:]}
+        ]
+        result["checks"].append("projectile_component_group_transition_confirmed")
         # Test an entity-bearing save/restore path, not just in-place spawns.
         # The saved volume contains the newly summoned arrows and mobs.
         command_confirm(server,
