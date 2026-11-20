@@ -156,8 +156,11 @@ def install_reinit_pack(folder: Path) -> None:
                   if line.startswith("level-name=")), "Bedrock level")
     world = folder / "worlds" / level
     world.mkdir(parents=True, exist_ok=True)
-    (world / "world_behavior_packs.json").write_text(
-        json.dumps([{"pack_id": pack_id, "version": [1, 0, 0]}], indent=2) + "\n")
+    stack_path = world / "world_behavior_packs.json"
+    stack = json.loads(stack_path.read_text()) if stack_path.is_file() else []
+    if not any(item.get("pack_id") == pack_id for item in stack):
+        stack.append({"pack_id": pack_id, "version": [1, 0, 0]})
+    stack_path.write_text(json.dumps(stack, indent=2) + "\n")
 
 
 def start_trace(server: Server, folder: Path):
