@@ -295,6 +295,16 @@ def main():
         for x, z in ((6, 8), (8, 8), (10, 8), (6, 10), (8, 10), (10, 10)):
             command_confirm(server, f"summon arrow {x} 225 {z}", "successfully summoned", 15)
         result["checks"].append("six_direct_arrows_summoned")
+        # Test an entity-bearing save/restore path, not just in-place spawns.
+        # The saved volume contains the newly summoned arrows and mobs.
+        command_confirm(server,
+                        "structure save onhit_projectiles 2 220 2 14 230 14 true memory false",
+                        "saved", 20)
+        result["checks"].append("entity_structure_saved")
+        command_confirm(server,
+                        "structure load onhit_projectiles 24 220 2 0_degrees none true false",
+                        "loaded", 20)
+        result["checks"].append("entity_structure_loaded")
         # Exercise the live actor/component lifecycle across leaving and
         # returning to the arena; do not infer unload from teleport alone.
         time.sleep(4)
