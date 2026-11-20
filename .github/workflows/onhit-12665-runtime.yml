@@ -86,7 +86,7 @@ jobs:
           main()
           PY
       - name: Diagnose upstream-mimalloc startup failure
-        if: steps.upstream_mimalloc.outcome == 'failure'
+        if: failure() && steps.upstream_mimalloc.outcome == 'failure'
         shell: bash
         run: |
           set -u
@@ -138,7 +138,7 @@ jobs:
           print((Path.cwd() / "work-onhit65/startup-gdb.log").read_text(errors="replace")[-12000:])
           PY
       - name: Try system jemalloc if official mimalloc fails
-        if: steps.upstream_mimalloc.outcome == 'failure'
+        if: failure() && steps.upstream_mimalloc.outcome == 'failure'
         shell: bash
         run: |
           set -euo pipefail
