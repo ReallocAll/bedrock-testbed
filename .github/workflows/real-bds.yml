@@ -264,10 +264,10 @@ jobs:
         if: inputs.chat_probe
         shell: bash
         run: |
-          .venv-client/bin/python nethernet_settings_probe.py \\
-            --server-python .venv-server/bin/python \\
-            --endpilot-commit "$ENDPILOT_COMMIT" \\
-            --probe endpilot-src/examples/chat.py \\
+          .venv-client/bin/python nethernet_settings_probe.py \
+            --server-python .venv-server/bin/python \
+            --endpilot-commit "$ENDPILOT_COMMIT" \
+            --probe endpilot-src/examples/chat.py \
             --transport "${{ matrix.transport }}" --chat
       - name: Verify settings or player join against fresh real BDS
         if: '!inputs.walk_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.timeout_probe && !inputs.chat_probe'
