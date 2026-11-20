@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--take", action="store_true", help="take half the chest stack")
     parser.add_argument("--put", action="store_true", help="take two and place one back")
+    parser.add_argument("--equip", action="store_true", help="take a helmet and equip it after closing")
     args = parser.parse_args()
     work = ROOT / "work"
     if work.exists():
@@ -63,8 +64,10 @@ def main():
                else "raknet://127.0.0.1:19132")
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url]
-            + (["--take-count", "2", "--destination-slot", "2"] if (args.take or args.put) else [])
-            + (["--put-back-count", "1"] if args.put else []),
+            + (["--take-count", "1" if args.equip else "2", "--destination-slot", "2"]
+               if (args.take or args.put or args.equip) else [])
+            + (["--put-back-count", "1"] if args.put else [])
+            + (["--equip-armor-slot", "0"] if args.equip else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -129,7 +132,11 @@ def main():
         server_has("successfully found", start)
         result["checks"].append("bds_chest_block_confirmed")
 
-        start = server.command("replaceitem block 1 100 0 slot.container 0 dirt 4")
+        chest_item = "iron_helmet" if args.equip else "dirt"
+        chest_amount = 1 if args.equip else 4
+        start = server.command(
+            f"replaceitem block 1 100 0 slot.container 0 {chest_item} {chest_amount}"
+        )
         server_has("replaced", start)
         result["checks"].append("bds_populated_chest_slot_zero")
 
@@ -145,16 +152,17 @@ def main():
         assert contents["count"] == 27, contents
         assert len(contents["nonempty"]) == 1, contents
         item = contents["nonempty"][0]
-        assert item["slot"] == 0 and item["item_id"] > 0 and item["stack_size"] == 4, contents
+        assert (item["slot"] == 0 and item["item_id"] > 0
+                and item["stack_size"] == chest_amount), contents
         result["server_chest_contents"] = contents
         result["checks"].append("server_confirmed_chest_slots")
 
-        if args.take or args.put:
+        if args.take or args.put or args.equip:
             transfer = json.loads(until("container_take_response="))
             assert transfer["request_id"] < 0 and transfer["request_id"] % 2 != 0, transfer
             assert transfer["result"] == "SUCCESS", transfer
-            assert transfer["chest_slot_count"] == 2, transfer
-            assert transfer["inventory_count"] == 2, transfer
+            assert transfer["chest_slot_count"] == (0 if args.equip else 2), transfer
+            assert transfer["inventory_count"] == (1 if args.equip else 2), transfer
             result["transfer"] = transfer
             result["checks"].append("server_accepted_chest_stack_split_into_inventory")
         if args.put:
@@ -173,6 +181,25 @@ def main():
         assert closed["open_window"] is False, closed
         result["checks"].append("server_confirmed_chest_window_close")
         server.wait_player(True)
+
+        if args.equip:
+            equipped = json.loads(until("armor_equip_response="))
+            assert equipped["request_id"] < 0 and equipped["request_id"] % 2 != 0, equipped
+            assert equipped["request_id"] != transfer["request_id"], equipped
+            assert equipped["result"] == "SUCCESS", equipped
+            assert equipped["armor_item_id"] == item["item_id"], equipped
+            assert equipped["armor_count"] == 1 and equipped["inventory_count"] == 0, equipped
+            result["armor_equip"] = equipped
+            result["checks"].append("server_accepted_helmet_equip_and_slot_corrections")
+
+            # Verify the actual armor slot independently from the packet response.
+            server.command(
+                "execute as @a[hasitem={item=iron_helmet,location=slot.armor.head}] "
+                "run setblock 2 100 0 gold_block"
+            )
+            start = server.command("testforblock 2 100 0 gold_block")
+            server_has("successfully found", start)
+            result["checks"].append("bds_independently_confirmed_helmet_armor_slot")
 
         send("disconnect")
         until("disconnected EndPilotTest")
