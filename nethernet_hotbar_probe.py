@@ -110,18 +110,6 @@ def main():
                     return
                 if server.process.poll() is not None:
                     raise RuntimeError("BDS exited while checking mainhand")
-            for query, location, slot in (
-                ("iron_pickaxe", "slot.hotbar", ",slot=2"),
-                ("iron_pickaxe", "slot.weapon.mainhand", ""),
-                ("stone", "slot.weapon.mainhand", ""),
-            ):
-                marker = f"diagnostic_{query}_{location.replace('.', '_')}"
-                start = server.command(
-                    f"execute as @a[hasitem={{item={query},location={location}{slot}}}] "
-                    f"run say {marker}"
-                )
-                time.sleep(0.3)
-                print(f"diagnostic {marker}: {server.snapshot(start)}", flush=True)
             raise AssertionError(f"BDS did not equip {item}: {last[-12:]}")
 
         server.wait_player(True)

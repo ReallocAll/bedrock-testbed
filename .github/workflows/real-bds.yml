@@ -390,7 +390,7 @@ jobs:
           .venv-client/bin/python nethernet_hotbar_probe.py \
             --server-python .venv-server/bin/python \
             --endpilot-commit "$ENDPILOT_COMMIT" \
-            --probe hotbar_debug.py \
+            --probe endpilot-src/examples/select_hotbar.py \
             --transport "${{ matrix.transport }}"
       - name: Verify settings or player join against fresh real BDS
         if: '!inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && !inputs.health_probe && !inputs.hotbar_probe'
