@@ -42,6 +42,8 @@ def main() -> int:
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--join", action="store_true")
     parser.add_argument("--position", action="store_true")
+    parser.add_argument("--refused", action="store_true", help="Require BDS allow-list rejection")
+    parser.add_argument("--transport", choices=("nethernet", "raknet"), default="nethernet")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -54,7 +56,7 @@ def main() -> int:
         "bds": "1.26.52",
         "endstone": "0.11.14",
         "protocol": 2193,
-        "transport": "nethernet",
+        "transport": args.transport,
         "endpilot_commit": args.endpilot_commit,
         "installed_endpilot_commit": None,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -78,15 +80,37 @@ def main() -> int:
         server = None
         results["checks"].append("official_bds_bootstrap_version_verified")
 
-        configure(folder / "server.properties", "nethernet")
+        properties = folder / "server.properties"
+        configure(properties, args.transport)
+        if args.refused:
+            content = properties.read_text()
+            assert "allow-list=false" in content
+            properties.write_text(content.replace("allow-list=false", "allow-list=true"))
         shutil.rmtree(folder / "worlds", ignore_errors=True)
         server = Server(args.server_python.absolute(), folder, work / "bds.log")
         server.start()
         server.wait_ready()
         results["checks"].append("clean_nethernet_bds_ready")
 
-        command = [sys.executable, str(args.probe.absolute()), "http://127.0.0.1:19132"]
-        if args.join or args.position:
+        url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
+               else "raknet://127.0.0.1:19132")
+        command = [sys.executable, str(args.probe.absolute()), url]
+        if args.refused:
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=45)
+            if completed.stdout:
+                print("[refused] " + completed.stdout.strip(), flush=True)
+            if completed.stderr:
+                print(completed.stderr, file=sys.stderr, flush=True)
+            if completed.returncode or "login_refused=LoginRefused" not in completed.stdout:
+                raise AssertionError(
+                    f"Expected explicit BDS login refusal, got exit={completed.returncode}: "
+                    f"{completed.stdout} {completed.stderr}"
+                )
+            results["refusal"] = completed.stdout.strip()
+            results["checks"].append("server_refusal_distinguished_from_transport_loss")
+            server.wait_player(False)
+            results["checks"].append("refused_player_not_spawned_bds_still_running")
+        elif args.join or args.position:
             command += ["--name", "EndPilotTest", "--hold", "2" if args.position else "15"]
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             try:
