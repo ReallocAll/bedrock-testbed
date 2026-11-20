@@ -250,7 +250,7 @@ jobs:
             --transport "${{ matrix.transport }}" \
             ${{ inputs.kick_probe && '--kick' || '' }}
       - name: Verify settings or player join against fresh real BDS
-        if: '!inputs.walk_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.refusal_probe'
+        if: '!inputs.walk_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe'
         shell: bash
         run: |
           .venv-client/bin/python nethernet_settings_probe.py \
