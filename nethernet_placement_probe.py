@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
+    parser.add_argument("--kick", action="store_true", help="Assert a BDS kick after placement")
     args = parser.parse_args()
     work = ROOT / "work"
     if work.exists():
@@ -88,7 +89,8 @@ def main():
         url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
                else "raknet://127.0.0.1:19132")
         client = subprocess.Popen(
-            [sys.executable, str(args.probe.absolute()), url, "--name", "EndPilotTest"],
+            [sys.executable, str(args.probe.absolute()), url, "--name", "EndPilotTest"]
+            + (["--expect-kick"] if args.kick else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -179,7 +181,12 @@ def main():
             )
 
         until("placement_checks_ready")
-        input_line("close")
+        if args.kick:
+            server.command("kick EndPilotTest EndPilotKickProbe")
+            until("server_disconnect=DisconnectPacket")
+            result["checks"].append("server_kick_delivered_typed_disconnect")
+        else:
+            input_line("close")
         until("disconnected EndPilotTest")
         assert client.wait(timeout=10) == 0
         server.wait_player(False)
