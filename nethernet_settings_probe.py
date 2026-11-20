@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import re
+import select
 import shutil
 import subprocess
 import sys
@@ -44,6 +46,7 @@ def main() -> int:
     parser.add_argument("--join", action="store_true")
     parser.add_argument("--position", action="store_true")
     parser.add_argument("--chat", action="store_true", help="Verify two BDS players exchange chat")
+    parser.add_argument("--command", action="store_true", help="Verify player command response and BDS effect")
     parser.add_argument("--refused", action="store_true", help="Require explicit full-server rejection")
     parser.add_argument("--transport", choices=("nethernet", "raknet"), default="nethernet")
     args = parser.parse_args()
@@ -136,6 +139,85 @@ def main() -> int:
                 results["checks"].append("holder_left_bds_list_empty")
 
             asyncio.run(run_full_server_probe())
+        elif args.command:
+            process = subprocess.Popen(
+                command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                server.wait_player(True, timeout=30)
+                deadline = time.monotonic() + 12
+                while time.monotonic() < deadline:
+                    if any("Player Spawned: EndPilotTest" in line for line in server.snapshot()):
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise TimeoutError("BDS did not finish player spawn")
+                results["checks"].append("command_player_spawned_real_bds")
+
+                # Base the target on the actual BDS player position, not a
+                # hard-coded coordinate that can be outside loaded terrain.
+                position = server_position(server)
+                x = math.floor(float(position["x"])) + 1
+                y = math.floor(float(position["y"]))
+                z = math.floor(float(position["z"]))
+                results["command_target"] = [x, y, z]
+                server.command(f"setblock {x} {y} {z} stone")
+                time.sleep(0.4)
+
+                def require_block(block):
+                    offset = server.command(f"testforblock {x} {y} {z} {block}")
+                    until = time.monotonic() + 8
+                    while time.monotonic() < until:
+                        if any("successfully found" in line.lower() for line in server.snapshot(offset)):
+                            return
+                        time.sleep(0.1)
+                    raise AssertionError(f"BDS did not confirm {block}: {server.snapshot(offset)}")
+
+                require_block("stone")
+                results["checks"].append("bds_baseline_stone_confirmed")
+                process.stdin.write(f"/setblock {x} {y} {z} gold_block\n")
+                process.stdin.flush()
+
+                deadline = time.monotonic() + 22
+                feedback = None
+                while time.monotonic() < deadline:
+                    readable, _, _ = select.select([process.stdout], [], [], 0.2)
+                    if readable:
+                        line = process.stdout.readline()
+                        if line.startswith("command_feedback="):
+                            feedback = json.loads(line.partition("=")[2])
+                            break
+                    if process.poll() is not None:
+                        raise AssertionError("Command example exited without BDS feedback")
+                if feedback is None:
+                    raise TimeoutError("No command feedback from the SDK")
+                from bedrock_protocol import TextPacketType
+                rawtext = json.loads(feedback["message"]).get("rawtext", [])
+                if feedback["type"] != int(TextPacketType.TEXT_OBJECT) or not any(
+                    part.get("translate") == "commands.setblock.success" for part in rawtext
+                ):
+                    raise AssertionError(f"Unexpected BDS command feedback: {feedback}")
+                results["command_feedback"] = feedback
+                results["checks"].append("typed_bds_command_text_observed")
+                require_block("gold_block")
+                results["checks"].append("bds_testforblock_confirmed_command_effect")
+
+                process.stdin.write("close\n")
+                process.stdin.flush()
+                stdout, stderr = process.communicate(timeout=15)
+                if stdout:
+                    print("[command] " + stdout.strip(), flush=True)
+                if stderr:
+                    print(stderr, file=sys.stderr, flush=True)
+                if process.returncode or "disconnected EndPilotTest" not in stdout:
+                    raise AssertionError(f"Command player did not close cleanly: {stdout} {stderr}")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
+            server.wait_player(False, timeout=20)
+            results["checks"].append("command_player_left_bds_list_empty")
         elif args.chat:
             process = subprocess.Popen(
                 command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
