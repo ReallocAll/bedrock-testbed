@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", type=Path, required=True)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
+    parser.add_argument("--pickup", action="store_true", help="Verify server pickup after mining")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -60,8 +61,9 @@ def main():
 
         url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
                else "raknet://127.0.0.1:19132")
+        target_x = 3 if args.pickup else 1
         client = subprocess.Popen(
-            [sys.executable, str(args.probe.absolute()), url, "1", "100", "0", "--face", "4"],
+            [sys.executable, str(args.probe.absolute()), url, str(target_x), "100", "0", "--face", "4"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -113,22 +115,38 @@ def main():
         # Reuse the existing Testbed helper that retries only that setup.
         filled(server, "fill -3 100 -3 3 104 3 air")
         filled(server, "fill -3 99 -3 3 99 3 stone")
-        server.command("setblock 1 100 0 dirt")
+        server.command(f"setblock {target_x} 100 0 dirt")
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.8)
-        server_has("successfully found", server.command("testforblock 1 100 0 dirt"))
+        server_has("successfully found", server.command(f"testforblock {target_x} 100 0 dirt"))
         result["checks"].append("bds_target_dirt_before_mining")
 
         send("mine")
         update = json.loads(until("mining_update=", timeout=20))
         assert update == {
-            "position": [1, 100, 0], "runtime_id": 0xDBF44120, "layer": 0
+            "position": [target_x, 100, 0], "runtime_id": 0xDBF44120,
+            **({} if args.pickup else {"layer": 0}),
         }, f"Expected server-reported air update, got {update}"
         result["client_air_update"] = update
         result["checks"].append("client_received_air_update")
 
-        server_has("successfully found", server.command("testforblock 1 100 0 air"))
+        server_has("successfully found", server.command(f"testforblock {target_x} 100 0 air"))
         result["checks"].append("bds_authoritative_block_is_air")
+
+        if args.pickup:
+            drop = json.loads(until("item_drop=", timeout=20))
+            assert drop["item_id"] == "minecraft:dirt" and drop["count"] >= 1, drop
+            assert drop["network_id"] > 0 and drop["runtime_id"] > 0, drop
+            result["item_drop"] = drop
+            result["checks"].append("server_spawned_dirt_item_actor")
+
+            collected = json.loads(until("item_collected=", timeout=25))
+            assert collected["runtime_id"] == drop["runtime_id"], (drop, collected)
+            assert collected["item_id"] == drop["item_id"], (drop, collected)
+            assert collected["inventory_after"] > collected["inventory_before"], collected
+            result["item_collected"] = collected
+            result["checks"].append("server_confirmed_player_pickup")
+            result["checks"].append("server_inventory_item_count_increased")
 
         send("close")
         until("disconnected EndPilotTest")
