@@ -18,8 +18,8 @@ from pathlib import Path
 from server import ROOT, Server, configure
 
 
-def server_position(server):
-    """Read the position accepted by BDS, not a client-side prediction."""
+def server_target(server):
+    """Read the player state accepted by BDS, including position and yaw."""
     offset = server.command("querytarget EndPilotTest")
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
@@ -33,9 +33,14 @@ def server_position(server):
                 targets = json.loads(raw)
                 if len(targets) != 1 or targets[0]["dimension"] != 0:
                     raise AssertionError(f"Unexpected querytarget result: {targets}")
-                return targets[0]["position"]
+                return targets[0]
         time.sleep(0.05)
     raise TimeoutError(f"No BDS querytarget response: {server.snapshot(offset)[-6:]}")
+
+
+def server_position(server):
+    """Read the position accepted by BDS, not a client-side prediction."""
+    return server_target(server)["position"]
 
 
 def main() -> int:
