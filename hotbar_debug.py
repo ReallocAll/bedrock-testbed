@@ -36,14 +36,15 @@ async def run(url):
                 await asyncio.to_thread(sys.stdin.readline)
                 descriptor = await bot._inventory.wait_for_slot(slot)
                 print(f"client_slot_before_select={slot} item={int(descriptor.id)} count={int(descriptor.stack_size)} variant={descriptor.net_id_variant}", flush=True)
-                await bot.select_hotbar(slot)
                 if slot == 2:
                     await bot.packets.send(b.PlayerHotbarPacket(
                         selected_slot=2,
                         container_id=b.ContainerID.INVENTORY,
                         should_select_slot=True,
                     ))
-                    print("diagnostic_player_hotbar_packet_sent", flush=True)
+                    print("diagnostic_player_hotbar_without_mob_equipment", flush=True)
+                else:
+                    await bot.select_hotbar(slot)
                 print(f"selected_hotbar_slot={slot}", flush=True)
             await asyncio.to_thread(sys.stdin.readline)
         finally:
