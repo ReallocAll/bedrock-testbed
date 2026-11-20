@@ -145,7 +145,18 @@ def main() -> int:
             try:
                 server.wait_player(True, timeout=30)
                 results["checks"].append("command_player_joined_real_bds")
-                # Establish the precondition through BDS, not a client prediction.
+                # Wait for the actual server spawn before manipulating loaded chunks.
+                deadline = time.monotonic() + 12
+                while time.monotonic() < deadline:
+                    if any("Player Spawned: EndPilotTest" in line for line in server.snapshot()):
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise TimeoutError("BDS did not finish player spawn")
+                server.command("tp EndPilotTest 0.5 100 0.5")
+                time.sleep(0.8)
+                server.command("fill -8 99 -8 8 99 8 stone")
+                time.sleep(0.8)
                 server.command("setblock 1 99 0 stone")
                 time.sleep(0.5)
                 process.stdin.write("go\n")
