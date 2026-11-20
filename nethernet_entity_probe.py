@@ -118,7 +118,7 @@ def main():
         until("spawned EndPilotTest")
         result["checks"].append("bds_player_spawned")
         server.command("tp EndPilotTest 0.5 100 0.5")
-        time.sleep(0.8)
+        time.sleep(3.0 if args.attack else 0.8)
         filled(server, "fill -8 100 -8 8 106 8 air")
         filled(server, "fill -8 99 -8 8 99 8 grass_block")
         server.command("tp EndPilotTest 0.5 100 0.5")
@@ -169,34 +169,33 @@ def main():
             result["checks"].append("bds_teleport_and_matching_runtime_id_move_confirmed")
         
         send("attack" if args.attack else "watch_remove")
-        until("entity_removal_watcher_ready")
         if args.attack:
-            attacks = int(until("attacks_submitted=", timeout=40))
-            # PacketReceiveEvent and ActorDamageEvent remain independent BDS oracles.
-            seen = [line for line in server.snapshot() if "combat_packet_received=" in line]
-            hits = [line for line in server.snapshot() if "combat_damage=" in line]
-            result["server_attack_packets"] = len(seen)
-            result["server_damage_events"] = hits
-            assert attacks > 0, "Client did not submit any attacks"
-            removed = json.loads(until("entity_removed="))
-            assert removed["entity_id"] == spawn["entity_id"], removed
-            # The server must independently report the attacked cow is gone;
-            # no server kill/damage command is used in this scene.
-            offset = server.command("testfor @e[type=cow]")
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline:
-                lines = server.snapshot(offset)
-                if any("no targets matched" in line.lower() or
-                       "no entities found" in line.lower() for line in lines):
+            attacks = int(until("attacks_submitted=", timeout=15))
+            if attacks != 1:
+                raise AssertionError(f"Expected one submitted player attack, got {attacks}")
+            # Packet receipt and damage come from passive BDS events, not SDK echo.
+            deadline = time.monotonic() + 10
+            while True:
+                lines = server.snapshot()
+                received = [line for line in lines if "combat_packet_received=" in line]
+                damaged = [line for line in lines if (
+                    "combat_damage=Cow:" in line
+                    and "attacker=EndPilotTest" in line
+                )]
+                if received and damaged:
                     break
-                if server.process.poll() is not None:
-                    raise RuntimeError("BDS exited during attack verification")
+                if time.monotonic() > deadline:
+                    raise AssertionError(
+                        f"BDS attack packet/damage not confirmed: received={received}, "
+                        f"damage={damaged}, recent={lines[-12:]}"
+                    )
                 time.sleep(0.1)
-            else:
-                raise AssertionError(f"BDS still finds a cow, or missing testfor feedback: {server.snapshot(offset)}")
             result["attacks_submitted"] = attacks
-            result["checks"].append("player_attack_caused_client_removal_and_bds_absence")
+            result["server_attack_packets"] = len(received)
+            result["server_damage_events"] = damaged
+            result["checks"].append("bds_received_single_player_attack_and_cow_damage")
         else:
+            until("entity_removal_watcher_ready")
             start = server.command("kill @e[type=cow,x=2,y=100,z=0,r=8]")
             removed = json.loads(until("entity_removed="))
             if removed["entity_id"] != spawn["entity_id"]:

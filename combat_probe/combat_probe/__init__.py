@@ -18,4 +18,5 @@ class CombatProbe(Plugin):
 
     @event_handler
     def on_damage(self, event: ActorDamageEvent):
-        self.logger.info(f"combat_damage={event.actor.name}:{event.damage}")
+        source = event.damage_source.actor
+        self.logger.info(f"combat_damage={event.actor.name}:{event.damage} attacker={getattr(source, 'name', None)}")
