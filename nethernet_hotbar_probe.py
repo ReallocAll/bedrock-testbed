@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from importlib.metadata import distribution
 from pathlib import Path
 
+from nethernet_walk_probe import filled
 from server import ROOT, Server, configure
 
 
@@ -136,6 +137,13 @@ def main():
         until("spawned EndPilotTest")
         result["checks"].append("bds_player_spawned")
         if args.use_item:
+            # The movement layer intentionally waits for a real server position,
+            # rather than trusting the StartGame placeholder.
+            server.command("tp EndPilotTest 0.5 100 0.5")
+            time.sleep(0.6)
+            filled(server, "fill -3 99 -3 3 99 3 stone")
+            server.command("tp EndPilotTest 0.5 100 0.5")
+            time.sleep(0.8)
             server.command("gamemode survival EndPilotTest")
             server.command("replaceitem entity EndPilotTest slot.hotbar 0 stone 1")
             server.command("replaceitem entity EndPilotTest slot.hotbar 2 iron_pickaxe 1")
