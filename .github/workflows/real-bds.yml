@@ -55,6 +55,11 @@ on:
         required: false
         type: boolean
         default: false
+      timeout_probe:
+        description: 'Verify a live player block wait times out and subsequent placement succeeds'
+        required: false
+        type: boolean
+        default: false
       identity_probe:
         description: 'Verify optional NetherNet server identity pinning'
         required: false
@@ -70,7 +75,7 @@ concurrency:
 
 jobs:
   endpilot:
-    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe && !inputs.position_probe && !inputs.walk_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.refusal_probe
+    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe && !inputs.position_probe && !inputs.walk_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.refusal_probe && !inputs.timeout_probe
     name: EndPilot (${{ matrix.suite }}, ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
@@ -162,13 +167,13 @@ jobs:
           retention-days: 14
 
   network_settings:
-    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.position_probe || inputs.walk_probe || inputs.identity_probe || inputs.block_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe)
+    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.position_probe || inputs.walk_probe || inputs.identity_probe || inputs.block_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe)
     name: EndPilot (settings / ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        transport: ${{ fromJSON((inputs.walk_probe || inputs.block_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe) && '["nethernet","raknet"]' || '["nethernet"]') }}
+        transport: ${{ fromJSON((inputs.walk_probe || inputs.block_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe) && '["nethernet","raknet"]' || '["nethernet"]') }}
     timeout-minutes: 30
     env:
       ENDPILOT_COMMIT: ${{ inputs.endpilot_commit }}
@@ -240,7 +245,7 @@ jobs:
             --probe endpilot-src/examples/observe_block.py \
             --transport "${{ matrix.transport }}"
       - name: Verify Endstone cancellation and allowed player block placement
-        if: inputs.place_probe || inputs.mcp_probe || inputs.kick_probe
+        if: inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.timeout_probe
         shell: bash
         run: |
           .venv-client/bin/python nethernet_placement_probe.py \
@@ -248,9 +253,10 @@ jobs:
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --probe ${{ inputs.mcp_probe && 'endpilot-src/examples/place_block_mcp.py' || 'endpilot-src/examples/place_block.py' }} \
             --transport "${{ matrix.transport }}" \
-            ${{ inputs.kick_probe && '--kick' || '' }}
+            ${{ inputs.kick_probe && '--kick' || '' }} \
+            ${{ inputs.timeout_probe && '--timeout' || '' }}
       - name: Verify settings or player join against fresh real BDS
-        if: '!inputs.walk_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe'
+        if: '!inputs.walk_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.timeout_probe'
         shell: bash
         run: |
           .venv-client/bin/python nethernet_settings_probe.py \
