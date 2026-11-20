@@ -26,10 +26,10 @@ async def exercise(server: Server, transport: str, results: dict):
             await bot.join_nethernet(url)
         else:
             await bot.join_raknet("127.0.0.1", 19132)
-        await bot.wait_for_position_sync()
         await asyncio.to_thread(server.wait_player, True)
         results["checks"].append("bds_player_spawned")
         server.command("tp EndPilotTest 0.5 100 0.5")
+        await bot.wait_for_position_sync()
         await asyncio.sleep(0.7)
         await asyncio.to_thread(filled, server, "fill -8 100 -8 8 105 8 air")
         await asyncio.to_thread(filled, server, "fill -8 99 -8 8 99 8 stone")
