@@ -413,16 +413,7 @@ jobs:
             --probe "${{ inputs.health_probe == 'respawn' && 'endpilot-src/examples/respawn.py' || 'endpilot-src/examples/observe_health.py' }}" \
             --transport "${{ matrix.transport }}" \
             ${{ inputs.health_probe == 'respawn' && '--respawn' || '' }}
-      - name: Verify selected hotbar item from public SDK on real BDS
-        if: inputs.hotbar_probe
-        shell: bash
-        run: |
-          .venv-client/bin/python nethernet_hotbar_probe.py \
-            --server-python .venv-server/bin/python \
-            --endpilot-commit "$ENDPILOT_COMMIT" \
-            --probe endpilot-src/examples/select_hotbar.py \
-            --transport "${{ matrix.transport }}"
-      - name: Verify held-item air-use through public SDK on real BDS
+      - name: Verify hotbar selection and held-item air-use on real BDS
         if: inputs.hotbar_probe
         shell: bash
         run: |
