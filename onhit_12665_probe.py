@@ -473,18 +473,28 @@ def main():
         # Cross-registry candidate: send a separate live, populated
         # ProjectileComponent to the Nether using the built-in execute/tp path.
         # A successful command alone is not proof of a dimension transfer.
+        command_confirm(
+            server,
+            "execute in nether run tickingarea add circle 8 80 8 2 onhit_nether_zone",
+            "Added", 15,
+        )
+        command_confirm(
+            server,
+            "execute in nether run fill 5 76 5 11 86 11 air",
+            "filled", 15,
+        )
         command_confirm(server, "summon onhit:probe_arrow 8 245 8",
                         "successfully summoned", 15)
         command_confirm(
             server,
             "execute as @e[type=onhit:probe_arrow,x=8,y=245,z=8,r=4] "
-            "in nether run tp @s 8 245 8",
+            "in nether run tp @s 8 82 8",
             "Teleported", 15,
         )
         command_confirm(
             server,
             "execute in nether if entity "
-            "@e[type=onhit:probe_arrow,x=8,y=245,z=8,r=8] "
+            "@e[type=onhit:probe_arrow,x=8,y=82,z=8,r=8] "
             "run say ONHIT_NETHER_PROJECTILE",
             "ONHIT_NETHER_PROJECTILE", 15,
         )
