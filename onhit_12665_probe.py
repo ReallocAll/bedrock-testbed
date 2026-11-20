@@ -159,7 +159,7 @@ def start_trace(server: Server, folder: Path):
         " silent\n"
         " set $init_calls = $init_calls + 1\n"
         " if $init_calls <= 160\n"
-        '  printf "REINIT_ENTRY record=0x%lx\\n", $rdi\n'
+        '  printf "REINIT_ENTRY record=0x%lx actor=0x%lx ecs_id=0x%x\\n", $rdi, $rsi, *(unsigned int*)($rsi+24)\n'
         " end\n"
         " set $start = *(unsigned long long*)($rdi+0x120)\n"
         " set $end = *(unsigned long long*)($rdi+0x128)\n"
@@ -295,7 +295,17 @@ def main():
         for x, z in ((6, 8), (8, 8), (10, 8), (6, 10), (8, 10), (10, 10)):
             command_confirm(server, f"summon arrow {x} 225 {z}", "successfully summoned", 15)
         result["checks"].append("six_direct_arrows_summoned")
-        for _ in range(3):
+        # Exercise the live actor/component lifecycle across leaving and
+        # returning to the arena; do not infer unload from teleport alone.
+        time.sleep(4)
+        server.command("tickingarea remove onhit_zone")
+        command_confirm(server, f"bot moveat {BOT} 1000 70 1000 overworld",
+                        f"已移动 {BOT}", 25)
+        time.sleep(8)
+        command_confirm(server, f"bot moveat {BOT} 8 221 8 overworld",
+                        f"已移动 {BOT}", 25)
+        result["checks"].append("arena_departure_and_return")
+        for _ in range(2):
             time.sleep(8)
         server.stop()
         server = None
