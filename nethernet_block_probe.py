@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
+    parser.add_argument("--subchunk", action="store_true")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -100,31 +101,52 @@ def main():
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(1)
 
+        if args.subchunk:
+            server.command("setblock 2 100 0 gold_block")
+            time.sleep(.5)
+
         client.stdin.write("go\n")
         client.stdin.flush()
-        until("block_watcher_ready")
-        results["checks"].append("client_watch_armed_before_change")
-
-        server.command("setblock 2 100 0 gold_block")
-        offset = server.command("testforblock 2 100 0 gold_block")
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            evidence = server.snapshot(offset)
-            if any("successfully found" in line.lower() for line in evidence):
-                break
-            if any("failed" in line.lower() or "not found" in line.lower() for line in evidence):
-                raise AssertionError(f"BDS rejected block oracle: {evidence}")
-            time.sleep(0.1)
+        if args.subchunk:
+            until("sub_chunk_request_submitted")
+            line = until("block_snapshots=", timeout=25)
+            event = json.loads(line.partition("block_snapshots=")[2])
+            samples = event["samples"]
+            assert event["unloaded"] is None and event["responses"] > 0, event
+            assert [sample["position"] for sample in samples] == [
+                [2, 100, 0], [3, 100, 0], [2, 99, 0],
+            ], samples
+            assert [sample["is_air"] for sample in samples] == [False, True, False], samples
+            assert all(sample["runtime_id"] is not None for sample in samples), samples
+            assert samples[0]["runtime_id"] != samples[1]["runtime_id"], samples
+            assert samples[2]["runtime_id"] != samples[1]["runtime_id"], samples
+            results["block_snapshots"] = event
+            results["checks"].append("requested_sub_chunk_response_and_known_air_vs_solid")
+            results["checks"].append("distant_unloaded_remains_unknown")
         else:
-            raise TimeoutError(f"No positive BDS testforblock result: {server.snapshot(offset)}")
-        results["checks"].append("bds_testforblock_gold_block_confirmed")
+            until("block_watcher_ready")
+            results["checks"].append("client_watch_armed_before_change")
 
-        line = until("block_update=", timeout=20)
-        event = json.loads(line.partition("block_update=")[2])
-        assert event["position"] == [2, 100, 0] and event["layer"] == 0, event
-        assert int(event["runtime_id"]) > 0, event
-        results["block_update"] = event
-        results["checks"].append("player_observed_targeted_server_block_update")
+            server.command("setblock 2 100 0 gold_block")
+            offset = server.command("testforblock 2 100 0 gold_block")
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                evidence = server.snapshot(offset)
+                if any("successfully found" in line.lower() for line in evidence):
+                    break
+                if any("failed" in line.lower() or "not found" in line.lower() for line in evidence):
+                    raise AssertionError(f"BDS rejected block oracle: {evidence}")
+                time.sleep(0.1)
+            else:
+                raise TimeoutError(f"No positive BDS testforblock result: {server.snapshot(offset)}")
+            results["checks"].append("bds_testforblock_gold_block_confirmed")
+
+            line = until("block_update=", timeout=20)
+            event = json.loads(line.partition("block_update=")[2])
+            assert event["position"] == [2, 100, 0] and event["layer"] == 0, event
+            assert int(event["runtime_id"]) > 0, event
+            results["block_update"] = event
+            results["checks"].append("player_observed_targeted_server_block_update")
         until("disconnected EndPilotTest", timeout=15)
         assert client.wait(timeout=10) == 0
         server.wait_player(False)
