@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from importlib.metadata import distribution
 from pathlib import Path
 
+from nethernet_walk_probe import filled
 from server import ROOT, Server, configure
 
 
@@ -108,8 +109,10 @@ def main():
         server.command("gamemode survival EndPilotTest")
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(1)
-        server.command("fill -3 100 -3 3 104 3 air")
-        server.command("fill -3 99 -3 3 99 3 stone")
+        # RakNet can spawn before this fresh world has generated the target chunk.
+        # Reuse the existing Testbed helper that retries only that setup.
+        filled(server, "fill -3 100 -3 3 104 3 air")
+        filled(server, "fill -3 99 -3 3 99 3 stone")
         server.command("setblock 1 100 0 dirt")
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.8)
