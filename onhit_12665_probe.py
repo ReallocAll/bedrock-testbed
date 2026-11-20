@@ -470,6 +470,25 @@ def main():
             {"event": event, "response": response[-500:]}
         ]
         result["checks"].append("projectile_component_group_transition_confirmed")
+        # Cross-registry candidate: send a separate live, populated
+        # ProjectileComponent to the Nether using the built-in execute/tp path.
+        # A successful command alone is not proof of a dimension transfer.
+        command_confirm(server, "summon onhit:probe_arrow 8 245 8",
+                        "successfully summoned", 15)
+        command_confirm(
+            server,
+            "execute as @e[type=onhit:probe_arrow,x=8,y=245,z=8,r=4] "
+            "in nether run tp @s 8 245 8",
+            "Teleported", 15,
+        )
+        command_confirm(
+            server,
+            "execute in nether if entity "
+            "@e[type=onhit:probe_arrow,x=8,y=245,z=8,r=8] "
+            "run say ONHIT_NETHER_PROJECTILE",
+            "ONHIT_NETHER_PROJECTILE", 15,
+        )
+        result["checks"].append("projectile_dimension_transfer_to_nether")
         # Test an entity-bearing save/restore path, not just in-place spawns.
         # The saved volume contains the newly summoned arrows and mobs.
         command_confirm(server,
