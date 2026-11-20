@@ -134,7 +134,14 @@ def main():
         result["checks"].append("server_confirmed_chest_window_open")
         server.wait_player(True)
 
-        send("close")
+        send("close_window")
+        closed = json.loads(until("container_closed="))
+        assert closed["id"] == opened["id"], (closed, opened)
+        assert closed["open_window"] is False, closed
+        result["checks"].append("server_confirmed_chest_window_close")
+        server.wait_player(True)
+
+        send("disconnect")
         until("disconnected EndPilotTest")
         assert client.wait(timeout=10) == 0
         server.wait_player(False)
