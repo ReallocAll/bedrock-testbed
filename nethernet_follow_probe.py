@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--stop", action="store_true")
+    parser.add_argument("--switch", action="store_true")
     args = parser.parse_args()
     work = ROOT / "work"
     if work.exists():
@@ -64,7 +65,8 @@ def main():
         url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
                else "raknet://127.0.0.1:19132")
         client = subprocess.Popen(
-            [sys.executable, str(args.probe.absolute()), url] + (["--stop"] if args.stop else []),
+            [sys.executable, str(args.probe.absolute()), url] +
+            (["--switch"] if args.switch else ["--stop"] if args.stop else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1,
         )
@@ -124,7 +126,38 @@ def main():
             raise AssertionError(f"Server did not observe westward tracking: {west}")
         outcome["checks"].append("server_observed_initial_westward_follow")
 
-        if args.stop:
+        if args.switch:
+            until("follow_switch_watcher_ready")
+            server.command("summon cow 6 100 0")
+            switched = json.loads(until("follow_switched=", timeout=12))
+            if (int(switched["runtime_id"]) == int(spawn["runtime_id"])
+                    or switched["position"][0] < 4):
+                raise AssertionError(f"Not a distinct eastward BDS cow: {switched}")
+            outcome["switched"] = switched
+            time.sleep(.85)
+            east = server_target(server)
+            outcome["east"] = east
+            if east["position"]["x"] <= west["position"]["x"] + 1.0:
+                raise AssertionError(f"BDS saw no displacement after target switch: {west} -> {east}")
+            if abs(float(east["yRot"]) + 90) > 8:
+                raise AssertionError(f"BDS did not turn toward second cow: {east}")
+            outcome["checks"].append("server_observed_live_target_switch")
+            send("stop")
+            payload = json.loads(until("follow_switched_stopped=", timeout=12))
+            outcome["input"] = payload
+            if not (5 <= payload["frames"] < 160):
+                raise AssertionError(f"Switch/stop did not end active follow: {payload}")
+            time.sleep(.4)
+            settled = server_target(server)
+            time.sleep(.7)
+            rested = server_target(server)
+            outcome["settled"] = settled
+            outcome["rested"] = rested
+            delta = abs(rested["position"]["x"] - settled["position"]["x"])
+            if delta > .35:
+                raise AssertionError(f"BDS still moving after stop: {settled} -> {rested}")
+            outcome["checks"].append("server_observed_stop_after_switch")
+        elif args.stop:
             send("stop")
             payload = json.loads(until("follow_stopped=", timeout=12))
             outcome["input"] = payload
