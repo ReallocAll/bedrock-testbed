@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from importlib.metadata import distribution
 from pathlib import Path
 
-from nethernet_settings_probe import server_position
+from nethernet_settings_probe import server_position, server_target
 from server import ROOT, Server, configure
 
 
@@ -119,9 +119,11 @@ def main():
         time.sleep(0.35)
         server.command("tp EndPilotTest 5.5 100 0.5")
         time.sleep(3)
-        after = server_position(server)
+        target = server_target(server) if args.turn else None
+        after = target["position"] if target is not None else server_position(server)
         result["walking"] = {
             "before": before, "after": after, "turned": args.turn,
+            "server_yaw": target["yRot"] if target is not None else None,
             "forward_distance": (5.5 - after["x"]) if args.turn else (after["z"] - before["z"]),
             "mid_walk_teleport": {"x": 5.5, "y": 100, "z": 0.5},
             "server_observation_ms": round((time.monotonic() - start) * 1000, 2),
@@ -136,8 +138,8 @@ def main():
             raise AssertionError(f"BDS did not accept forward movement: {result['walking']}")
         result["checks"].append("bds_querytarget_confirmed_walk")
         if args.turn:
-            if abs(after["z"] - 0.5) > 0.5 or not 3.0 < after["x"] < 5.5:
-                raise AssertionError(f"BDS did not retain corrected position and westward heading: {result['walking']}")
+            if abs(after["z"] - 0.5) > 0.5 or abs(float(target["yRot"]) - 90) > 1:
+                raise AssertionError(f"BDS did not retain westward heading and z position: {result['walking']}")
             result["checks"].append("bds_westward_facing_direction_confirmed")
         elif abs(after["x"] - 5.5) > 0.3:
             raise AssertionError(f"BDS position did not retain the mid-walk correction: {result['walking']}")
