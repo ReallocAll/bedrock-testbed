@@ -25,7 +25,10 @@ def main():
     parser.add_argument("--probe", type=Path, required=True)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--pickup", action="store_true", help="Verify server pickup after mining")
+    parser.add_argument("--place-collected", action="store_true", help="Place mined inventory dirt on BDS")
     args = parser.parse_args()
+    if args.place_collected and not args.pickup:
+        parser.error("--place-collected requires --pickup")
 
     work = ROOT / "work"
     if work.exists():
@@ -63,7 +66,8 @@ def main():
                else "raknet://127.0.0.1:19132")
         target_x = 3 if args.pickup else 1
         client = subprocess.Popen(
-            [sys.executable, str(args.probe.absolute()), url, str(target_x), "100", "0", "--face", "4"],
+            [sys.executable, str(args.probe.absolute()), url, str(target_x), "100", "0", "--face", "4"]
+            + (["--place-collected"] if args.place_collected else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -148,6 +152,37 @@ def main():
             result["checks"].append("server_confirmed_player_pickup")
             result["checks"].append("server_inventory_item_count_increased")
 
+        if args.place_collected:
+            # Normalize the reach/orientation setup after the variable-length pickup.
+            server.command("tp EndPilotTest 0.5 100 0.5")
+            time.sleep(0.8)
+            server_has("successfully found", server.command("testforblock 2 100 1 air"))
+            result["checks"].append("bds_placement_target_initially_air")
+            send("watch")
+            until("placement_support_watch_ready")
+            server.command("setblock 2 99 1 gold_block")
+            support = json.loads(until("placement_support_observed="))
+            assert support["position"] == [2, 99, 1] and support["runtime_id"] > 0, support
+            result["support"] = support
+            result["checks"].append("client_observed_placement_support")
+
+            send("place")
+            submitted = json.loads(until("placement_submitted="))
+            assert submitted["tick"] > 0, submitted
+            px, _, pz = submitted["player_position"]
+            assert abs(px - 0.5) < 0.3 and abs(pz - 0.5) < 0.3, submitted
+            block = json.loads(until("placement_block=", timeout=10))
+            assert block["position"] == [2, 100, 1] and block["runtime_id"] != 0xDBF44120, block
+            result["client_placement_block"] = block
+            server_has("successfully found", server.command("testforblock 2 100 1 dirt"))
+            result["checks"].append("bds_placed_collected_dirt")
+            placed = json.loads(until("placement_update=", timeout=20))
+            assert placed["position"] == [2, 100, 1], placed
+            assert placed["runtime_id"] != 0xDBF44120, placed
+            assert placed["inventory_before"] >= 1, placed
+            assert placed["inventory_after"] == placed["inventory_before"] - 1, placed
+            result["placement"] = {"submitted": submitted, "observed": placed}
+            result["checks"].append("client_received_placement_and_inventory_decrement")
         send("close")
         until("disconnected EndPilotTest")
         assert client.wait(timeout=10) == 0
