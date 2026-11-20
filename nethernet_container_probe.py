@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--probe", type=Path, required=True)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--take", action="store_true", help="take half the chest stack")
+    parser.add_argument("--put", action="store_true", help="take two and place one back")
     args = parser.parse_args()
     work = ROOT / "work"
     if work.exists():
@@ -62,7 +63,8 @@ def main():
                else "raknet://127.0.0.1:19132")
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url]
-            + (["--take-count", "2", "--destination-slot", "2"] if args.take else []),
+            + (["--take-count", "2", "--destination-slot", "2"] if (args.take or args.put) else [])
+            + (["--put-back-count", "1"] if args.put else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -147,7 +149,7 @@ def main():
         result["server_chest_contents"] = contents
         result["checks"].append("server_confirmed_chest_slots")
 
-        if args.take:
+        if args.take or args.put:
             transfer = json.loads(until("container_take_response="))
             assert transfer["request_id"] < 0 and transfer["request_id"] % 2 != 0, transfer
             assert transfer["result"] == "SUCCESS", transfer
@@ -155,6 +157,15 @@ def main():
             assert transfer["inventory_count"] == 2, transfer
             result["transfer"] = transfer
             result["checks"].append("server_accepted_chest_stack_split_into_inventory")
+        if args.put:
+            returned = json.loads(until("container_put_response="))
+            assert returned["request_id"] < 0 and returned["request_id"] % 2 != 0, returned
+            assert returned["request_id"] != transfer["request_id"], returned
+            assert returned["result"] == "SUCCESS", returned
+            assert returned["chest_slot_count"] == 3, returned
+            assert returned["inventory_count"] == 1, returned
+            result["return_transfer"] = returned
+            result["checks"].append("server_accepted_inventory_to_chest_place")
 
         send("close_window")
         closed = json.loads(until("container_closed="))
