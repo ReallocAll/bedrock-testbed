@@ -1,5 +1,5 @@
-"""Testbed-only passive observer for received attack packets and mob damage."""
-from endstone.event import ActorDamageEvent, PacketReceiveEvent, event_handler
+"""Testbed-only passive observer for actor actions and mob damage."""
+from endstone.event import ActorDamageEvent, PacketReceiveEvent, PlayerInteractActorEvent, event_handler
 from endstone.plugin import Plugin
 
 
@@ -20,3 +20,7 @@ class CombatProbe(Plugin):
     def on_damage(self, event: ActorDamageEvent):
         source = event.damage_source.actor
         self.logger.info(f"combat_damage={event.actor.name}:{event.damage} attacker={getattr(source, 'name', None)}")
+
+    @event_handler
+    def on_interact(self, event: PlayerInteractActorEvent):
+        self.logger.info(f"combat_interact={event.actor.name} player={event.player.name}")
