@@ -50,6 +50,11 @@ on:
         required: false
         type: boolean
         default: false
+      refusal_probe:
+        description: 'Verify full BDS rejects a second player with LoginRefused'
+        required: false
+        type: boolean
+        default: false
       identity_probe:
         description: 'Verify optional NetherNet server identity pinning'
         required: false
@@ -65,7 +70,7 @@ concurrency:
 
 jobs:
   endpilot:
-    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe && !inputs.position_probe && !inputs.walk_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe
+    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe && !inputs.position_probe && !inputs.walk_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.refusal_probe
     name: EndPilot (${{ matrix.suite }}, ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
@@ -157,13 +162,13 @@ jobs:
           retention-days: 14
 
   network_settings:
-    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.position_probe || inputs.walk_probe || inputs.identity_probe || inputs.block_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe)
+    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.position_probe || inputs.walk_probe || inputs.identity_probe || inputs.block_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe)
     name: EndPilot (settings / ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        transport: ${{ fromJSON((inputs.walk_probe || inputs.block_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe) && '["nethernet","raknet"]' || '["nethernet"]') }}
+        transport: ${{ fromJSON((inputs.walk_probe || inputs.block_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe) && '["nethernet","raknet"]' || '["nethernet"]') }}
     timeout-minutes: 30
     env:
       ENDPILOT_COMMIT: ${{ inputs.endpilot_commit }}
@@ -251,8 +256,9 @@ jobs:
           .venv-client/bin/python nethernet_settings_probe.py \
             --server-python .venv-server/bin/python \
             --endpilot-commit "$ENDPILOT_COMMIT" \
-            --probe "${{ inputs.position_probe && 'endpilot-src/examples/observe_position_nethernet.py' || inputs.join_probe && 'endpilot-src/examples/join_nethernet.py' || 'endpilot-src/examples/probe_nethernet.py' }}" \
-            ${{ inputs.position_probe && '--position' || inputs.join_probe && '--join' || '' }}
+            --probe "${{ inputs.refusal_probe && 'endpilot-src/examples/refused_login.py' || inputs.position_probe && 'endpilot-src/examples/observe_position_nethernet.py' || inputs.join_probe && 'endpilot-src/examples/join_nethernet.py' || 'endpilot-src/examples/probe_nethernet.py' }}" \
+            --transport "${{ matrix.transport }}" \
+            ${{ inputs.refusal_probe && '--refused' || inputs.position_probe && '--position' || inputs.join_probe && '--join' || '' }}
       - name: Save evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
