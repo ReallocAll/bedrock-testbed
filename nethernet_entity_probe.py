@@ -118,7 +118,7 @@ def main():
         until("spawned EndPilotTest")
         result["checks"].append("bds_player_spawned")
         server.command("tp EndPilotTest 0.5 100 0.5")
-        time.sleep(3.0 if args.attack else 0.8)
+        time.sleep(3.0)  # Allow the high-Y chunk to load before filling the arena.
         filled(server, "fill -8 100 -8 8 106 8 air")
         filled(server, "fill -8 99 -8 8 99 8 grass_block")
         server.command("tp EndPilotTest 0.5 100 0.5")
