@@ -176,7 +176,7 @@ def main() -> int:
 
                 require_block("stone")
                 results["checks"].append("bds_baseline_stone_confirmed")
-                process.stdin.write("go\n")
+                process.stdin.write(f"/setblock {x} {y} {z} gold_block\n")
                 process.stdin.flush()
 
                 deadline = time.monotonic() + 22
