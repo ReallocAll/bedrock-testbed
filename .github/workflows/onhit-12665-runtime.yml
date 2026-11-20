@@ -45,7 +45,8 @@ jobs:
         shell: bash
         run: |
           python -m py_compile server.py onhit_12665_probe.py
-          python onhit_12665_probe.py --server-python .venv-server/bin/python
+          ENDSTONE_TEST_VERSION="$(.venv-server/bin/python -c 'import importlib.metadata as m; print(m.version("endstone"))')" \
+            python onhit_12665_probe.py --server-python .venv-server/bin/python
       - name: Print decisive events
         if: always()
         run: |
