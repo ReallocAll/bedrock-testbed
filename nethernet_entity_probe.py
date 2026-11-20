@@ -25,7 +25,10 @@ def main():
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--attack", action="store_true", help="Kill the observed cow only with player attacks")
+    parser.add_argument("--interact", action="store_true", help="Right-click the observed cow and verify the Endstone event")
     args = parser.parse_args()
+    if args.attack and args.interact:
+        parser.error("--attack and --interact are mutually exclusive")
 
     work = ROOT / "work"
     if work.exists():
@@ -57,8 +60,8 @@ def main():
         server = None
         configure(folder / "server.properties", args.transport)
         shutil.rmtree(folder / "worlds", ignore_errors=True)
-        if args.attack:
-            # Passive Endstone listener: differentiate received packet 30 from damage.
+        if args.attack or args.interact:
+            # Passive Endstone observer: record received transactions and resulting events.
             wheels = work / "wheels"
             wheels.mkdir()
             subprocess.run(
@@ -73,7 +76,7 @@ def main():
         server = Server(args.server_python.absolute(), folder, work / "bds.log")
         server.start()
         server.wait_ready()
-        if args.attack:
+        if args.attack or args.interact:
             # Server Ready precedes plugin on_enable; wait for the listener.
             deadline = time.monotonic() + 10
             while not any("combat_probe_enabled" in line for line in server.snapshot()):
@@ -139,7 +142,7 @@ def main():
         result["entity_spawn"] = spawn
         result["checks"].append("bds_summon_and_client_typed_spawn_confirmed")
 
-        if args.attack:
+        if args.attack or args.interact:
             # The cow must remain within normal survival reach while attacking.
             server.command("gamemode survival EndPilotTest")
             server.command("effect @e[type=cow] slowness 60 255 true")
@@ -168,8 +171,24 @@ def main():
             result["entity_movement"] = moved
             result["checks"].append("bds_teleport_and_matching_runtime_id_move_confirmed")
         
-        send("attack" if args.attack else "watch_remove")
-        if args.attack:
+        send("interact" if args.interact else "attack" if args.attack else "watch_remove")
+        if args.interact:
+            interactions = int(until("interactions_submitted=", timeout=15))
+            if interactions != 1:
+                raise AssertionError(f"Expected one submitted interaction, got {interactions}")
+            deadline = time.monotonic() + 10
+            while True:
+                events = [line for line in server.snapshot()
+                          if "combat_interact=Cow player=EndPilotTest" in line]
+                if events:
+                    break
+                if time.monotonic() > deadline:
+                    raise AssertionError(f"BDS actor interaction event not observed: {server.snapshot()[-20:]}")
+                time.sleep(0.1)
+            result["interactions_submitted"] = interactions
+            result["server_interaction_events"] = len(events)
+            result["checks"].append("bds_player_interact_actor_event_confirmed")
+        elif args.attack:
             attacks = int(until("attacks_submitted=", timeout=15))
             if attacks != 1:
                 raise AssertionError(f"Expected one submitted player attack, got {attacks}")

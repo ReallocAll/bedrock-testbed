@@ -239,7 +239,7 @@ jobs:
       fail-fast: false
       matrix:
         transport: ${{ fromJSON((inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || inputs.health_probe || inputs.hotbar_probe || inputs.mining_probe || inputs.pickup_probe) && '["nethernet","raknet"]' || '["nethernet"]') }}
-        entity_scene: ${{ fromJSON(inputs.entity_probe && '["observe","attack"]' || '["observe"]') }}
+        entity_scene: ${{ fromJSON(inputs.entity_probe && '["observe","attack","interact"]' || '["observe"]') }}
     timeout-minutes: 30
     env:
       ENDPILOT_COMMIT: ${{ inputs.endpilot_commit }}
@@ -394,6 +394,15 @@ jobs:
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --probe endpilot-src/examples/attack_entity.py \
             --transport "${{ matrix.transport }}" --attack
+      - name: Verify right-click actor triggers a real Endstone event
+        if: inputs.entity_probe && matrix.entity_scene == 'interact'
+        shell: bash
+        run: |
+          .venv-client/bin/python nethernet_entity_probe.py \
+            --server-python .venv-server/bin/python \
+            --endpilot-commit "$ENDPILOT_COMMIT" \
+            --probe endpilot-src/examples/interact_entity.py \
+            --transport "${{ matrix.transport }}" --interact
       - name: Verify player health changes after real BDS damage
         if: inputs.health_probe
         shell: bash
