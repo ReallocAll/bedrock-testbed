@@ -15,6 +15,7 @@ from importlib.metadata import distribution
 from pathlib import Path
 
 from nethernet_walk_probe import filled
+from nethernet_settings_probe import server_position
 from server import ROOT, Server, configure
 
 
@@ -24,6 +25,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
+    parser.add_argument("--respawn", action="store_true")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -100,26 +102,61 @@ def main():
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
         filled(server, "fill -8 99 -8 8 99 8 grass_block")
+        if args.respawn:
+            filled(server, "fill -8 100 -8 8 105 8 air")
         server.command("tp EndPilotTest 0.5 100 0.5")
         server.command("gamemode survival EndPilotTest")
         time.sleep(1)
 
-        send("watch")
-        until("health_watcher_ready")
-        result["checks"].append("client_health_watcher_armed")
-        start = server.command("damage EndPilotTest 4")
-        observed = float(until("health_update="))
-        if observed != 16.0:
-            raise AssertionError(f"Unexpected server-reported post-damage health: {observed}")
-        deadline = time.monotonic() + 6
-        while time.monotonic() < deadline:
-            if any("damag" in line.lower() for line in server.snapshot(start)):
-                break
-            time.sleep(0.1)
+        if args.respawn:
+            send("watch")
+            until("death_watcher_ready")
+            start = server.command("kill EndPilotTest")
+            dead = float(until("death_health=", timeout=20))
+            if dead > 0:
+                raise AssertionError(f"Player did not report death: health={dead}")
+            if not any("kill" in line.lower() for line in server.snapshot(start)):
+                raise AssertionError(f"No BDS kill response: {server.snapshot(start)}")
+            result["death_health"] = dead
+            result["checks"].append("bds_kill_and_client_death_health_confirmed")
+
+            send("respawn")
+            spawn = json.loads(until("respawn_ready=", timeout=20))
+            health = float(until("respawn_health=", timeout=20))
+            if health <= 0:
+                raise AssertionError(f"Respawn did not restore health: {health}")
+            result["respawn"] = {"server_position": spawn, "health": health}
+            result["checks"].append("client_received_server_respawn_ready_and_health")
+
+            # Independent BDS oracle: move on a prepared lane after respawning.
+            server.command("tp EndPilotTest 0.5 100 0.5")
+            time.sleep(0.8)
+            before = server_position(server)
+            send("go")
+            frames = int(until("walk_frames=", timeout=25))
+            time.sleep(0.6)
+            after = server_position(server)
+            result["post_respawn_walk"] = {"frames": frames, "before": before, "after": after}
+            if frames != 24 or after["z"] - before["z"] < 0.65:
+                raise AssertionError(f"BDS did not accept post-respawn movement: {result['post_respawn_walk']}")
+            result["checks"].append("bds_querytarget_confirms_post_respawn_walking")
         else:
-            raise AssertionError(f"BDS did not confirm damage command: {server.snapshot(start)}")
-        result["health_after_damage"] = observed
-        result["checks"].append("bds_damage_and_client_health_update_confirmed")
+            send("watch")
+            until("health_watcher_ready")
+            result["checks"].append("client_health_watcher_armed")
+            start = server.command("damage EndPilotTest 4")
+            observed = float(until("health_update="))
+            if observed != 16.0:
+                raise AssertionError(f"Unexpected server-reported post-damage health: {observed}")
+            deadline = time.monotonic() + 6
+            while time.monotonic() < deadline:
+                if any("damag" in line.lower() for line in server.snapshot(start)):
+                    break
+                time.sleep(0.1)
+            else:
+                raise AssertionError(f"BDS did not confirm damage command: {server.snapshot(start)}")
+            result["health_after_damage"] = observed
+            result["checks"].append("bds_damage_and_client_health_update_confirmed")
 
         send("close")
         until("disconnected EndPilotTest")
