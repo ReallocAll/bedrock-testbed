@@ -40,6 +40,11 @@ on:
         required: false
         type: boolean
         default: false
+      obstacle_probe:
+        description: 'Verify observed-block obstacle route using the public SDK'
+        required: false
+        type: boolean
+        default: false
       stop_probe:
         description: 'Verify explicit stop of a running player follow action on BDS'
         required: false
@@ -120,7 +125,7 @@ concurrency:
 
 jobs:
   endpilot:
-    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe && !inputs.position_probe && !inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.refusal_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && !inputs.health_probe
+    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe && !inputs.position_probe && !inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.refusal_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && !inputs.health_probe
     name: EndPilot (${{ matrix.suite }}, ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
@@ -212,13 +217,13 @@ jobs:
           retention-days: 14
 
   network_settings:
-    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.position_probe || inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.identity_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || inputs.health_probe)
+    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.position_probe || inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.identity_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || inputs.health_probe)
     name: EndPilot (settings / ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        transport: ${{ fromJSON((inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || inputs.health_probe) && '["nethernet","raknet"]' || '["nethernet"]') }}
+        transport: ${{ fromJSON((inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || inputs.health_probe) && '["nethernet","raknet"]' || '["nethernet"]') }}
     timeout-minutes: 30
     env:
       ENDPILOT_COMMIT: ${{ inputs.endpilot_commit }}
@@ -347,6 +352,14 @@ jobs:
             --transport "${{ matrix.transport }}" \
             ${{ inputs.stop_probe && '--stop' || '' }} \
             ${{ inputs.switch_probe && '--switch' || '' }}
+      - name: Verify observed-flat-ground route around a real BDS obstacle
+        if: inputs.obstacle_probe
+        shell: bash
+        run: |
+          .venv-client/bin/python nethernet_obstacle_probe.py \
+            --server-python .venv-server/bin/python \
+            --endpilot-commit "$ENDPILOT_COMMIT" \
+            --transport "${{ matrix.transport }}"
       - name: Verify actor spawn, movement and removal on the live client
         if: inputs.entity_probe
         shell: bash
@@ -366,7 +379,7 @@ jobs:
             --probe endpilot-src/examples/observe_health.py \
             --transport "${{ matrix.transport }}"
       - name: Verify settings or player join against fresh real BDS
-        if: '!inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && !inputs.health_probe'
+        if: '!inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && !inputs.health_probe'
         shell: bash
         run: |
           .venv-client/bin/python nethernet_settings_probe.py \
