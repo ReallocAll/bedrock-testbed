@@ -51,7 +51,7 @@ on:
         type: boolean
         default: false
       refusal_probe:
-        description: 'Verify BDS allow-list refusal is classified as LoginRefused'
+        description: 'Verify full BDS rejects a second player with LoginRefused'
         required: false
         type: boolean
         default: false

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import re
 import shutil
@@ -42,7 +43,7 @@ def main() -> int:
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--join", action="store_true")
     parser.add_argument("--position", action="store_true")
-    parser.add_argument("--refused", action="store_true", help="Require BDS allow-list rejection")
+    parser.add_argument("--refused", action="store_true", help="Require explicit full-server rejection")
     parser.add_argument("--transport", choices=("nethernet", "raknet"), default="nethernet")
     args = parser.parse_args()
 
@@ -84,32 +85,55 @@ def main() -> int:
         configure(properties, args.transport)
         if args.refused:
             content = properties.read_text()
-            assert "allow-list=false" in content
-            properties.write_text(content.replace("allow-list=false", "allow-list=true"))
+            configured = re.sub(r"(?m)^max-players=\\d+$", "max-players=1", content)
+            if configured == content:
+                raise AssertionError("BDS bootstrap server.properties has no max-players setting")
+            properties.write_text(configured)
         shutil.rmtree(folder / "worlds", ignore_errors=True)
         server = Server(args.server_python.absolute(), folder, work / "bds.log")
         server.start()
         server.wait_ready()
-        results["checks"].append("clean_nethernet_bds_ready")
+        results["checks"].append("clean_bds_ready")
 
         url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
                else "raknet://127.0.0.1:19132")
         command = [sys.executable, str(args.probe.absolute()), url]
         if args.refused:
-            completed = subprocess.run(command, capture_output=True, text=True, timeout=45)
-            if completed.stdout:
-                print("[refused] " + completed.stdout.strip(), flush=True)
-            if completed.stderr:
-                print(completed.stderr, file=sys.stderr, flush=True)
-            if completed.returncode or "login_refused=LoginRefused" not in completed.stdout:
-                raise AssertionError(
-                    f"Expected explicit BDS login refusal, got exit={completed.returncode}: "
-                    f"{completed.stdout} {completed.stderr}"
-                )
-            results["refusal"] = completed.stdout.strip()
-            results["checks"].append("server_refusal_distinguished_from_transport_loss")
-            server.wait_player(False)
-            results["checks"].append("refused_player_not_spawned_bds_still_running")
+            from endpilot import Bot
+
+            async def run_full_server_probe():
+                holder = Bot("EndPilotTest")
+                try:
+                    if args.transport == "raknet":
+                        await holder.join_raknet("127.0.0.1", 19132)
+                    else:
+                        await holder.join_nethernet(url)
+                    await asyncio.to_thread(server.wait_player, True)
+                    results["checks"].append("first_player_occupied_only_server_slot")
+
+                    completed = await asyncio.to_thread(
+                        subprocess.run, command, capture_output=True, text=True, timeout=45
+                    )
+                    if completed.stdout:
+                        print("[refused] " + completed.stdout.strip(), flush=True)
+                    if completed.stderr:
+                        print(completed.stderr, file=sys.stderr, flush=True)
+                    if completed.returncode or "login_refused=LoginRefused" not in completed.stdout:
+                        raise AssertionError(
+                            f"Expected explicit BDS login refusal, got exit={completed.returncode}: "
+                            f"{completed.stdout} {completed.stderr}"
+                        )
+                    results["refusal"] = completed.stdout.strip()
+                    results["checks"].append("server_refusal_distinguished_from_transport_loss")
+                    lines = await asyncio.to_thread(server.wait_player, True)
+                    assert not any("EndPilotDenied" in line for line in lines), lines
+                    results["checks"].append("refused_player_not_spawned_holder_still_online")
+                finally:
+                    await holder.close()
+                await asyncio.to_thread(server.wait_player, False)
+                results["checks"].append("holder_left_bds_list_empty")
+
+            asyncio.run(run_full_server_probe())
         elif args.join or args.position:
             command += ["--name", "EndPilotTest", "--hold", "2" if args.position else "15"]
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
