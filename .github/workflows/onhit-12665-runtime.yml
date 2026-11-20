@@ -98,6 +98,56 @@ jobs:
           print("Diagnostic GDB returncode:", proc.returncode)
           print((Path.cwd() / "work-onhit65/startup-gdb.log").read_text(errors="replace")[-12000:])
           PY
+      - name: Compare rebuilt and released mimalloc at first BDS boot
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p wheelhouse-release
+          .venv-server/bin/python -m pip download --no-deps --only-binary=:all: 'endstone==0.11.16' -d wheelhouse-release
+          .venv-server/bin/python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import shutil
+          import subprocess
+          import zipfile
+          from server import Server, ROOT
+
+          pyexe = (ROOT / ".venv-server/bin/python").absolute()
+          installed = Path(subprocess.check_output(
+              [str(pyexe), "-c", "from pathlib import Path; import endstone; print(Path(endstone.__file__).parent)"],
+              text=True
+          ).strip())
+          target = installed / "libmimalloc.so"
+          wheel, = (ROOT / "wheelhouse-release").glob("endstone-0.11.16-*.whl")
+          with zipfile.ZipFile(wheel) as archive:
+              released = archive.read("endstone/libmimalloc.so")
+          digest = lambda b: hashlib.sha256(b).hexdigest()
+          print("MIMALLOC_SOURCE_SHA256", digest(target.read_bytes()), flush=True)
+          print("MIMALLOC_RELEASE_SHA256", digest(released), flush=True)
+          target.write_bytes(released)
+          work = ROOT / "work-onhit65"
+          logfile = work / "allocator-swap-bds.log"
+          version = subprocess.check_output(
+              [str(pyexe), "-c", "import importlib.metadata as m; print(m.version('endstone'))"],
+              text=True
+          ).strip()
+          server = Server(pyexe, work / "server", logfile,
+                          expected_endstone=version, expected_bds="26.65")
+          passed = False
+          try:
+              server.start()
+              server.wait_ready(timeout=180)
+              print("RELEASE_MIMALLOC_SOURCE_RUNTIME_BOOTSTRAP_PASS", flush=True)
+              passed = True
+          finally:
+              try:
+                  server.stop()
+              except Exception as exc:
+                  print("STARTUP_CONTROL_SHUTDOWN", repr(exc), flush=True)
+                  if passed:
+                      raise
+          PY
       - name: Print decisive events
         if: always()
         run: |
@@ -114,6 +164,7 @@ jobs:
           path: |
             work-onhit65/result.json
             work-onhit65/startup-gdb.log
+            work-onhit65/allocator-swap-bds.log
             work-onhit65/ownership-gdb.log
             work-onhit65/bds.log
             work-onhit65/server/version.txt
