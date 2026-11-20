@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import re
 import select
 import shutil
@@ -154,14 +155,18 @@ def main() -> int:
                     raise TimeoutError("BDS did not finish player spawn")
                 results["checks"].append("command_player_spawned_real_bds")
 
-                # Use an in-range, loaded coordinate and verify the starting block.
-                server.command("tp EndPilotTest 0.5 100 0.5")
-                time.sleep(1)
-                server.command("setblock 1 99 0 stone")
+                # Base the target on the actual BDS player position, not a
+                # hard-coded coordinate that can be outside loaded terrain.
+                position = server_position(server)
+                x = math.floor(float(position["x"])) + 1
+                y = math.floor(float(position["y"]))
+                z = math.floor(float(position["z"]))
+                results["command_target"] = [x, y, z]
+                server.command(f"setblock {x} {y} {z} stone")
                 time.sleep(0.4)
 
                 def require_block(block):
-                    offset = server.command(f"testforblock 1 99 0 {block}")
+                    offset = server.command(f"testforblock {x} {y} {z} {block}")
                     until = time.monotonic() + 8
                     while time.monotonic() < until:
                         if any("successfully found" in line.lower() for line in server.snapshot(offset)):
