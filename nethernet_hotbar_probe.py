@@ -1,4 +1,4 @@
-"""Verify public hotbar selection from BDS-held item, not just emitted packets."""
+"""Verify public held-item selection and use against authoritative BDS inventory."""
 from __future__ import annotations
 
 import argparse
@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from importlib.metadata import distribution
 from pathlib import Path
 
+from nethernet_walk_probe import filled
 from server import ROOT, Server, configure
 
 
@@ -23,6 +24,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", type=Path, required=True)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
+    parser.add_argument("--use-item", action="store_true", help="Use a snowball in air and verify server consumption")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -112,20 +114,72 @@ def main():
                     raise RuntimeError("BDS exited while checking mainhand")
             raise AssertionError(f"BDS did not equip {item}: {last[-12:]}")
 
+
+        def expect_snowballs(count):
+            marker = f"item_use_bds_snowballs_{count}"
+            deadline = time.monotonic() + 10
+            last = []
+            while time.monotonic() < deadline:
+                start = server.command(
+                    "execute as @a[hasitem={item=snowball,quantity="
+                    f"{count}..{count},location=slot.weapon.mainhand}}] "
+                    f"run say {marker}"
+                )
+                time.sleep(0.3)
+                last = server.snapshot(start)
+                if any(marker in line for line in last):
+                    return
+                if server.process.poll() is not None:
+                    raise RuntimeError("BDS exited while checking snowball count")
+            raise AssertionError(f"BDS did not report {count} held snowballs: {last[-12:]}")
+
         server.wait_player(True)
         until("spawned EndPilotTest")
         result["checks"].append("bds_player_spawned")
-        server.command("replaceitem entity EndPilotTest slot.hotbar 0 stone 1")
-        server.command("replaceitem entity EndPilotTest slot.hotbar 2 iron_pickaxe 1")
-        time.sleep(0.8)
+        if args.use_item:
+            # The movement layer intentionally waits for a real server position,
+            # rather than trusting the StartGame placeholder.
+            server.command("tp EndPilotTest 0.5 100 0.5")
+            time.sleep(0.6)
+            filled(server, "fill -3 99 -3 3 99 3 stone")
+            server.command("tp EndPilotTest 0.5 100 0.5")
+            time.sleep(0.8)
+            server.command("gamemode survival EndPilotTest")
+            server.command("replaceitem entity EndPilotTest slot.hotbar 0 stone 1")
+            server.command("replaceitem entity EndPilotTest slot.hotbar 2 iron_pickaxe 1")
+            time.sleep(0.8)
+            for slot, item in ((0, "stone"), (2, "iron_pickaxe")):
+                send("select")
+                chosen = int(until("hotbar_selection_submitted="))
+                assert chosen == slot, (chosen, slot)
+                expect_mainhand(item)
+                result["checks"].append(f"bds_mainhand_{item}_after_select_{slot}")
 
-        for slot, item in ((0, "stone"), (2, "iron_pickaxe")):
+            server.command("replaceitem entity EndPilotTest slot.hotbar 0 snowball 2")
+            time.sleep(0.8)
             send("select")
             chosen = int(until("hotbar_selection_submitted="))
-            if chosen != slot:
-                raise AssertionError(f"SDK selected {chosen} instead of {slot}")
-            expect_mainhand(item)
-            result["checks"].append(f"bds_mainhand_{item}_after_select_{slot}")
+            assert chosen == 0, chosen
+            expect_snowballs(2)
+            result["checks"].append("bds_equipped_two_snowballs")
+            send("use")
+            count = int(until("item_use_submitted="))
+            assert count == 1, f"SDK submitted {count} item uses"
+            result["checks"].append("public_sdk_use_item_submitted")
+            expect_snowballs(1)
+            result["checks"].append("bds_held_snowball_count_decremented")
+        else:
+            server.command("replaceitem entity EndPilotTest slot.hotbar 0 stone 1")
+            server.command("replaceitem entity EndPilotTest slot.hotbar 2 iron_pickaxe 1")
+            time.sleep(0.8)
+
+            for slot, item in ((0, "stone"), (2, "iron_pickaxe")):
+                send("select")
+                chosen = int(until("hotbar_selection_submitted="))
+                if chosen != slot:
+                    raise AssertionError(f"SDK selected {chosen} instead of {slot}")
+                expect_mainhand(item)
+                result["checks"].append(f"bds_mainhand_{item}_after_select_{slot}")
 
         send("close")
         until("disconnected EndPilotTest")
