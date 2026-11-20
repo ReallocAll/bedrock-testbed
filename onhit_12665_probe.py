@@ -305,6 +305,20 @@ def main():
                         "structure load onhit_projectiles 24 220 2 0_degrees none true false",
                         "loaded", 20)
         result["checks"].append("entity_structure_loaded")
+        # A successful load command does not prove that a projectile
+        # entity was included. Only positions around the destination count.
+        for label, selector in (
+            ("restored_arrow", "@e[type=arrow,x=30,y=222,z=8,r=14]"),
+            ("restored_shulker", "@e[type=shulker,x=30,y=221,z=11,r=14]"),
+        ):
+            marker = "ONHIT_" + label.upper()
+            try:
+                command_confirm(server,
+                                f"execute if entity {selector} run say {marker}",
+                                marker, 7)
+                result[label] = True
+            except TimeoutError:
+                result[label] = False
         # Exercise the live actor/component lifecycle across leaving and
         # returning to the arena; do not infer unload from teleport alone.
         time.sleep(4)
