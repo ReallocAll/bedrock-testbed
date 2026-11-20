@@ -95,18 +95,22 @@ def main():
             # This command emits a unique marker only if the BDS selector matches
             # the actual equipped mainhand item. Packet submission alone cannot pass.
             marker = f"hotbar_bds_mainhand_{item}"
-            start = server.command(
-                f"execute as @a[hasitem={{item={item},location=slot.weapon.mainhand}}] "
-                f"run say {marker}"
-            )
             deadline = time.monotonic() + 8
+            last = []
             while time.monotonic() < deadline:
-                if any(marker in line for line in server.snapshot(start)):
+                start = server.command(
+                    f"execute as @a[hasitem={{item={item},location=slot.weapon.mainhand}}] "
+                    f"run say {marker}"
+                )
+                # BDS can process the client's queued equipment packet *after*
+                # the probe receives its submission marker.
+                time.sleep(0.3)
+                last = server.snapshot(start)
+                if any(marker in line for line in last):
                     return
                 if server.process.poll() is not None:
                     raise RuntimeError("BDS exited while checking mainhand")
-                time.sleep(0.1)
-            raise AssertionError(f"BDS did not equip {item}: {server.snapshot(start)[-12:]}")
+            raise AssertionError(f"BDS did not equip {item}: {last[-12:]}")
 
         server.wait_player(True)
         until("spawned EndPilotTest")
