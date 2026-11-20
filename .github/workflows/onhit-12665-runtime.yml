@@ -1,8 +1,8 @@
-name: Isolated BDS 1.26.65 source release baseline
+name: Isolated BDS 1.26.65 patched Runtime with release allocator
 
 on:
   push:
-    branches: [test/onhit-12665-tag-source]
+    branches: [test/onhit-12665-published-allocator]
   workflow_dispatch:
 
 permissions:
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ReallocAll/endstone
-          ref: 23cb5758bdc070888cb89ecd1541ef25c4305b5c
+          ref: 1fad28dccf2b8ce9c4d8752a5c55d3c38950a589
           path: endstone-src
           fetch-depth: 0
           submodules: true
@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C endstone-src rev-parse HEAD)" = 23cb5758bdc070888cb89ecd1541ef25c4305b5c
+          test "$(git -C endstone-src rev-parse HEAD)" = 1fad28dccf2b8ce9c4d8752a5c55d3c38950a589
           sudo apt-get install -y --no-install-recommends libelf-dev gdb binutils
           python -m pip install conan ninja
           python -m venv .venv-server
@@ -41,6 +41,33 @@ jobs:
           .venv-server/bin/python -m pip install 'git+https://github.com/ReallocAll/endstone-bot.git@4bd0691f1ef0f551e5ba258d4747b35a3b748177'
           .venv-server/bin/python -m pip check
           .venv-server/bin/python -c 'import importlib.metadata as m; print("PATCHED_ENDSTONE_VERSION",m.version("endstone"))'
+      - name: Install published 0.11.16 allocator only
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv-server/bin/python -m pip download --no-deps --only-binary=:all: 'endstone==0.11.16' -d wheelhouse-release
+          .venv-server/bin/python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import subprocess
+          import zipfile
+
+          root = Path.cwd()
+          pyexe = (root / ".venv-server/bin/python").absolute()
+          installed = Path(subprocess.check_output(
+              [str(pyexe), "-c", "from pathlib import Path; import endstone; print(Path(endstone.__file__).parent)"],
+              text=True
+          ).strip())
+          target = installed / "libmimalloc.so"
+          wheel, = (root / "wheelhouse-release").glob("endstone-0.11.16-*.whl")
+          with zipfile.ZipFile(wheel) as archive:
+              released = archive.read("endstone/libmimalloc.so")
+          print("MIMALLOC_SOURCE_SHA256", hashlib.sha256(target.read_bytes()).hexdigest(), flush=True)
+          print("MIMALLOC_RELEASE_SHA256", hashlib.sha256(released).hexdigest(), flush=True)
+          target.write_bytes(released)
+          assert hashlib.sha256(target.read_bytes()).digest() == hashlib.sha256(released).digest()
+          print("PUBLISHED_MIMALLOC_INSTALLED_FOR_PATCHED_RUNTIME", flush=True)
+          PY
       - name: Trace actual deletion on patched Linux BDS
         shell: bash
         run: |
@@ -97,56 +124,6 @@ jobs:
                                     stderr=subprocess.STDOUT, timeout=120, check=False)
           print("Diagnostic GDB returncode:", proc.returncode)
           print((Path.cwd() / "work-onhit65/startup-gdb.log").read_text(errors="replace")[-12000:])
-          PY
-      - name: Compare rebuilt and released mimalloc at first BDS boot
-        if: failure()
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p wheelhouse-release
-          .venv-server/bin/python -m pip download --no-deps --only-binary=:all: 'endstone==0.11.16' -d wheelhouse-release
-          .venv-server/bin/python - <<'PY'
-          from pathlib import Path
-          import hashlib
-          import shutil
-          import subprocess
-          import zipfile
-          from server import Server, ROOT
-
-          pyexe = (ROOT / ".venv-server/bin/python").absolute()
-          installed = Path(subprocess.check_output(
-              [str(pyexe), "-c", "from pathlib import Path; import endstone; print(Path(endstone.__file__).parent)"],
-              text=True
-          ).strip())
-          target = installed / "libmimalloc.so"
-          wheel, = (ROOT / "wheelhouse-release").glob("endstone-0.11.16-*.whl")
-          with zipfile.ZipFile(wheel) as archive:
-              released = archive.read("endstone/libmimalloc.so")
-          digest = lambda b: hashlib.sha256(b).hexdigest()
-          print("MIMALLOC_SOURCE_SHA256", digest(target.read_bytes()), flush=True)
-          print("MIMALLOC_RELEASE_SHA256", digest(released), flush=True)
-          target.write_bytes(released)
-          work = ROOT / "work-onhit65"
-          logfile = work / "allocator-swap-bds.log"
-          version = subprocess.check_output(
-              [str(pyexe), "-c", "import importlib.metadata as m; print(m.version('endstone'))"],
-              text=True
-          ).strip()
-          server = Server(pyexe, work / "server", logfile,
-                          expected_endstone=version, expected_bds="26.65")
-          passed = False
-          try:
-              server.start()
-              server.wait_ready(timeout=180)
-              print("RELEASE_MIMALLOC_SOURCE_RUNTIME_BOOTSTRAP_PASS", flush=True)
-              passed = True
-          finally:
-              try:
-                  server.stop()
-              except Exception as exc:
-                  print("STARTUP_CONTROL_SHUTDOWN", repr(exc), flush=True)
-                  if passed:
-                      raise
           PY
       - name: Print decisive events
         if: always()
