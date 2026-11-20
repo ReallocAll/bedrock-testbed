@@ -401,6 +401,10 @@ def main():
                       expected_endstone=ENDSTONE, expected_bds=BDS)
 
     try:
+        # The test workload uses RakNet. Avoid a NetherNet first boot on the
+        # v0.11 integration baseline until its unrelated startup crash is isolated.
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "server.properties").write_text("transport=raknet\n")
         server = new_server()
         server.start()
         server.wait_ready()
