@@ -137,8 +137,21 @@ def main():
         result["checks"].append("bds_player_spawned")
         if args.use_item:
             server.command("gamemode survival EndPilotTest")
+            server.command("replaceitem entity EndPilotTest slot.hotbar 0 stone 1")
+            server.command("replaceitem entity EndPilotTest slot.hotbar 2 iron_pickaxe 1")
+            time.sleep(0.8)
+            for slot, item in ((0, "stone"), (2, "iron_pickaxe")):
+                send("select")
+                chosen = int(until("hotbar_selection_submitted="))
+                assert chosen == slot, (chosen, slot)
+                expect_mainhand(item)
+                result["checks"].append(f"bds_mainhand_{item}_after_select_{slot}")
+
             server.command("replaceitem entity EndPilotTest slot.hotbar 0 snowball 2")
             time.sleep(0.8)
+            send("select")
+            chosen = int(until("hotbar_selection_submitted="))
+            assert chosen == 0, chosen
             expect_snowballs(2)
             result["checks"].append("bds_equipped_two_snowballs")
             send("use")
