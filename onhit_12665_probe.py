@@ -91,6 +91,75 @@ def remaining_deleting_destructor_breakpoints(bias: int) -> str:
         for number, (name, ea) in enumerate(entries, 6)
     )
 
+def install_reinit_pack(folder: Path) -> None:
+    """Load one isolated projectile whose definition event changes its on-hit component."""
+    pack_id = "9ee997e2-4e23-4cd6-a32b-4f5ca0d9bbd1"
+    pack = folder / "behavior_packs" / "onhit_reinit_probe"
+    entities = pack / "entities"
+    entities.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "format_version": 2,
+        "header": {
+            "name": "Isolated OnHit reinitialization probe",
+            "description": "Testbed-only projectile component-group transition",
+            "uuid": pack_id,
+            "version": [1, 0, 0],
+            "min_engine_version": [1, 26, 0],
+        },
+        "modules": [{
+            "type": "data", "uuid": "451b837f-e5f7-4ff3-91c0-14fe596909d2",
+            "version": [1, 0, 0],
+        }],
+    }
+    base_projectile = {
+        "gravity": 0.05, "power": 1.1,
+        "on_hit": {
+            "impact_damage": {"damage": 1, "destroy_on_hit": True},
+            "stick_in_ground": {"shake_time": 0.35},
+            "arrow_effect": {},
+        },
+    }
+    alternate_projectile = {
+        "gravity": 0.05, "power": 1.6,
+        "on_hit": {
+            "impact_damage": {"damage": 2, "destroy_on_hit": True},
+            "stick_in_ground": {"shake_time": 0.35},
+            "arrow_effect": {},
+        },
+    }
+    entity = {
+        "format_version": "1.20.80",
+        "minecraft:entity": {
+            "description": {
+                "identifier": "onhit:probe_arrow", "runtime_identifier": "minecraft:arrow",
+                "is_spawnable": False, "is_summonable": True,
+            },
+            "components": {
+                "minecraft:type_family": {"family": ["projectile", "arrow"]},
+                "minecraft:collision_box": {"width": 0.25, "height": 0.25},
+                "minecraft:physics": {},
+                "minecraft:projectile": base_projectile,
+            },
+            "component_groups": {
+                "onhit:alternate": {"minecraft:projectile": alternate_projectile},
+            },
+            "events": {
+                "onhit:toggle": {"add": {"component_groups": ["onhit:alternate"]}},
+                "onhit:reset": {"remove": {"component_groups": ["onhit:alternate"]}},
+            },
+        },
+    }
+    (pack / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (entities / "onhit_probe.json").write_text(json.dumps(entity, indent=2) + "\n")
+    level = next((line.split("=", 1)[1].strip()
+                  for line in (folder / "server.properties").read_text().splitlines()
+                  if line.startswith("level-name=")), "Bedrock level")
+    world = folder / "worlds" / level
+    world.mkdir(parents=True, exist_ok=True)
+    (world / "world_behavior_packs.json").write_text(
+        json.dumps([{"pack_id": pack_id, "version": [1, 0, 0]}], indent=2) + "\n")
+
+
 def start_trace(server: Server, folder: Path):
     pid, bias = bds_pid_and_bias(server, folder)
     script = WORK / "ownership.gdb"
@@ -247,6 +316,8 @@ def main():
         result["binary"] = binary_info(folder)
         result["checks"].append("elf_sha256_and_build_id")
         configure(folder / "server.properties", "raknet")
+        install_reinit_pack(folder)
+        result["checks"].append("isolated_projectile_group_pack_installed")
         patch = folder / "plugins" / "bot" / "enable_beta.py"
         if not patch.is_file():
             raise FileNotFoundError("Endstone Bot beta enablement script missing")
@@ -295,6 +366,27 @@ def main():
         for x, z in ((6, 8), (8, 8), (10, 8), (6, 10), (8, 10), (10, 10)):
             command_confirm(server, f"summon arrow {x} 225 {z}", "successfully summoned", 15)
         result["checks"].append("six_direct_arrows_summoned")
+        # Mechanism-targeted: a live projectile receives a different
+        # minecraft:projectile component group without despawning.
+        command_confirm(server, "summon onhit:probe_arrow 8 225 8",
+                        "successfully summoned", 15)
+        command_confirm(server,
+                        "execute if entity @e[type=onhit:probe_arrow] run say ONHIT_PROBE_ALIVE",
+                        "ONHIT_PROBE_ALIVE", 15)
+        result["checks"].append("probe_projectile_alive")
+        for event in ("onhit:toggle", "onhit:reset", "onhit:toggle"):
+            offset = server.command(
+                f"event entity @e[type=onhit:probe_arrow] {event}"
+            )
+            time.sleep(2)
+            reply = "\n".join(server.snapshot(offset))
+            result.setdefault("group_transition_responses", []).append(
+                {"event": event, "response": reply[-500:]}
+            )
+            if any(word in reply.lower() for word in
+                   ("no targets matched", "unknown event", "failed to execute", "syntax error")):
+                raise RuntimeError(f"Group transition failed: {event}: {reply[-500:]}")
+        result["checks"].append("projectile_component_group_transitions_sent")
         # Test an entity-bearing save/restore path, not just in-place spawns.
         # The saved volume contains the newly summoned arrows and mobs.
         command_confirm(server,
