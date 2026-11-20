@@ -39,6 +39,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
+    parser.add_argument("--turn", action="store_true", help="Face west before moving forward")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -85,7 +86,8 @@ def main():
         player = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()),
              "http://127.0.0.1:19132" if args.transport == "nethernet" else "raknet://127.0.0.1:19132",
-             "--name", "EndPilotTest", "--ticks", "24", "--hold", "4"],
+             "--name", "EndPilotTest", "--ticks", "24", "--hold", "4"] +
+            (["--look-west"] if args.turn else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True,
         )
@@ -119,8 +121,8 @@ def main():
         time.sleep(3)
         after = server_position(server)
         result["walking"] = {
-            "before": before, "after": after,
-            "forward_distance": after["z"] - before["z"],
+            "before": before, "after": after, "turned": args.turn,
+            "forward_distance": (5.5 - after["x"]) if args.turn else (after["z"] - before["z"]),
             "mid_walk_teleport": {"x": 5.5, "y": 100, "z": 0.5},
             "server_observation_ms": round((time.monotonic() - start) * 1000, 2),
         }
@@ -130,10 +132,14 @@ def main():
             print(stderr, file=sys.stderr, flush=True)
         result["walking"]["client_exit_code"] = player.returncode
         result["walking"]["client_stderr"] = stderr[-3000:]
-        if after["z"] - before["z"] < 1.0:
+        if result["walking"]["forward_distance"] < 1.0:
             raise AssertionError(f"BDS did not accept forward movement: {result['walking']}")
         result["checks"].append("bds_querytarget_confirmed_walk")
-        if abs(after["x"] - 5.5) > 0.3:
+        if args.turn:
+            if abs(after["z"] - 0.5) > 0.5 or not 3.0 < after["x"] < 5.5:
+                raise AssertionError(f"BDS did not retain corrected position and westward heading: {result['walking']}")
+            result["checks"].append("bds_westward_facing_direction_confirmed")
+        elif abs(after["x"] - 5.5) > 0.3:
             raise AssertionError(f"BDS position did not retain the mid-walk correction: {result['walking']}")
         if player.returncode != 0 or "disconnected EndPilotTest" not in stdout:
             raise RuntimeError(f"Walking script failed: exit={player.returncode}: {stderr}")
@@ -143,6 +149,11 @@ def main():
         frames = json.loads(match.group(1))
         if frames["frames"] != 24:
             raise AssertionError(f"Incorrect input count: {frames}")
+        if args.turn and (
+            frames["facing"] is None or
+            abs(frames["facing"][0]) > 0.01 or abs(frames["facing"][1] - 90) > 0.01
+        ):
+            raise AssertionError(f"SDK did not aim west before submitting movement: {frames}")
         result["walking"]["input"] = frames
         match = re.search(r"^walk_server_packets=(.+)$", stdout, re.M)
         if match is None:
