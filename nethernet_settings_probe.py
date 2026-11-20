@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import json
 import re
+import select
 import shutil
 import subprocess
 import sys
@@ -144,8 +145,6 @@ def main() -> int:
             )
             try:
                 server.wait_player(True, timeout=30)
-                results["checks"].append("command_player_joined_real_bds")
-                # Wait for the actual server spawn before manipulating loaded chunks.
                 deadline = time.monotonic() + 12
                 while time.monotonic() < deadline:
                     if any("Player Spawned: EndPilotTest" in line for line in server.snapshot()):
@@ -153,38 +152,61 @@ def main() -> int:
                     time.sleep(0.1)
                 else:
                     raise TimeoutError("BDS did not finish player spawn")
+                results["checks"].append("command_player_spawned_real_bds")
+
+                # Use an in-range, loaded coordinate and verify the starting block.
                 server.command("tp EndPilotTest 0.5 100 0.5")
-                time.sleep(0.8)
-                server.command("fill -8 99 -8 8 99 8 stone")
-                time.sleep(0.8)
+                time.sleep(1)
                 server.command("setblock 1 99 0 stone")
-                time.sleep(0.5)
+                time.sleep(0.4)
+
+                def require_block(block):
+                    offset = server.command(f"testforblock 1 99 0 {block}")
+                    until = time.monotonic() + 8
+                    while time.monotonic() < until:
+                        if any("successfully found" in line.lower() for line in server.snapshot(offset)):
+                            return
+                        time.sleep(0.1)
+                    raise AssertionError(f"BDS did not confirm {block}: {server.snapshot(offset)}")
+
+                require_block("stone")
+                results["checks"].append("bds_baseline_stone_confirmed")
                 process.stdin.write("go\n")
                 process.stdin.flush()
-                stdout, stderr = process.communicate(timeout=35)
+
+                deadline = time.monotonic() + 22
+                feedback = None
+                while time.monotonic() < deadline:
+                    readable, _, _ = select.select([process.stdout], [], [], 0.2)
+                    if readable:
+                        line = process.stdout.readline()
+                        if line.startswith("command_feedback="):
+                            feedback = json.loads(line.partition("=")[2])
+                            break
+                    if process.poll() is not None:
+                        raise AssertionError("Command example exited without BDS feedback")
+                if feedback is None:
+                    raise TimeoutError("No command feedback from the SDK")
+                from bedrock_protocol import TextPacketType
+                rawtext = json.loads(feedback["message"]).get("rawtext", [])
+                if feedback["type"] != int(TextPacketType.TEXT_OBJECT) or not any(
+                    part.get("translate") == "commands.setblock.success" for part in rawtext
+                ):
+                    raise AssertionError(f"Unexpected BDS command feedback: {feedback}")
+                results["command_feedback"] = feedback
+                results["checks"].append("typed_bds_command_text_observed")
+                require_block("gold_block")
+                results["checks"].append("bds_testforblock_confirmed_command_effect")
+
+                process.stdin.write("close\n")
+                process.stdin.flush()
+                stdout, stderr = process.communicate(timeout=15)
                 if stdout:
                     print("[command] " + stdout.strip(), flush=True)
                 if stderr:
                     print(stderr, file=sys.stderr, flush=True)
-                match = re.search(r"^command_result=(.+)$", stdout, re.M)
-                if process.returncode or not match or "disconnected EndPilotTest" not in stdout:
-                    raise AssertionError(f"Command example did not complete: {stdout} {stderr}")
-                output = json.loads(match.group(1))
-                if output["success_count"] < 1 or not any(
-                    message["successful"] for message in output["messages"]
-                ):
-                    raise AssertionError(f"BDS did not report a successful player command: {output}")
-                results["command_output"] = output
-                results["checks"].append("matched_typed_command_output_received")
-                offset = server.command("testforblock 1 99 0 gold_block")
-                deadline = time.monotonic() + 8
-                while time.monotonic() < deadline:
-                    if any("successfully found" in line.lower() for line in server.snapshot(offset)):
-                        break
-                    time.sleep(0.1)
-                else:
-                    raise AssertionError(f"BDS never confirmed gold block: {server.snapshot(offset)}")
-                results["checks"].append("bds_testforblock_confirmed_command_effect")
+                if process.returncode or "disconnected EndPilotTest" not in stdout:
+                    raise AssertionError(f"Command player did not close cleanly: {stdout} {stderr}")
             finally:
                 if process.poll() is None:
                     process.kill()
