@@ -82,12 +82,12 @@ def remaining_deleting_destructor_breakpoints(bias: int) -> str:
         ("CatchFire", 0x7172890),
     )
     return "".join(
-        f"break *0x{bias + ea:x}\\n"
-        f"commands {number}\\n"
-        " silent\\n"
-        f' printf "OTHER_DELETING_DTOR type={name} object=0x%lx\\\\n", $rdi\\n'
-        " continue\\n"
-        "end\\n"
+        f"break *0x{bias + ea:x}\n"
+        f"commands {number}\n"
+        " silent\n"
+        f' printf "OTHER_DELETING_DTOR type={name} object=0x%lx\\\n", $rdi\n'
+        " continue\n"
+        "end\n"
         for number, (name, ea) in enumerate(entries, 6)
     )
 
