@@ -118,6 +118,28 @@ def main():
         result["entity_spawn"] = spawn
         result["checks"].append("bds_summon_and_client_typed_spawn_confirmed")
 
+        # The SDK observer must be armed before BDS moves this exact actor.
+        send("6")
+        until("entity_movement_watcher_ready")
+        start = server.command("tp @e[type=cow,x=2,y=100,z=0,r=8] 6 100 0")
+        moved = json.loads(until("entity_movement="))
+        if int(moved["runtime_id"]) != int(spawn["runtime_id"]):
+            raise AssertionError(f"Moved wrong actor: {moved}, expected {spawn}")
+        if moved["x"] is None or abs(float(moved["x"]) - 6.0) >= 1.0:
+            raise AssertionError(f"Client did not observe BDS target coordinate: {moved}")
+        if float(moved["x"]) - float(spawn["position"][0]) < 2:
+            raise AssertionError(f"Actor did not move from its initial position: {spawn}, {moved}")
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            lines = server.snapshot(start)
+            if any("teleported" in line.lower() for line in lines):
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError(f"BDS did not confirm entity teleport: {server.snapshot(start)}")
+        result["entity_movement"] = moved
+        result["checks"].append("bds_teleport_and_matching_runtime_id_move_confirmed")
+
         send("watch_remove")
         until("entity_removal_watcher_ready")
         start = server.command("kill @e[type=cow,x=2,y=100,z=0,r=8]")
