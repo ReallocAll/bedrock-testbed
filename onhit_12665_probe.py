@@ -409,6 +409,23 @@ def main():
         server.start()
         server.wait_ready()
         result["checks"].append("official_bds_start")
+        external_allocator = os.environ.get("ONHIT_EXTERNAL_ALLOCATOR")
+        if external_allocator:
+            pid, _ = bds_pid_and_bias(server, folder)
+            mapped = set()
+            for line in Path(f"/proc/{pid}/maps").read_text().splitlines():
+                fields = line.split()
+                if len(fields) >= 6:
+                    mapped.add(fields[-1])
+            selected = str(Path(external_allocator).resolve(strict=True))
+            if selected not in mapped:
+                raise AssertionError("External allocator was not mapped in the live BDS process")
+            if any("endstone/libmimalloc.so" in item for item in mapped):
+                raise AssertionError("Bundled Endstone mimalloc was mapped despite external preload")
+            if not any(item.endswith("/libendstone_runtime.so") for item in mapped):
+                raise AssertionError("Endstone Runtime is not mapped in the live BDS process")
+            print("BDS_EXTERNAL_ALLOCATOR_CONFIRMED", Path(selected).name, flush=True)
+            result["checks"].append("external_allocator_loaded_without_bundled_mimalloc")
         server.stop()
         server = None
         result["binary"] = binary_info(folder)
