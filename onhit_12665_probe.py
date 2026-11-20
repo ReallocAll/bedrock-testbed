@@ -252,6 +252,66 @@ def start_trace(server: Server, folder: Path):
         '   set $old1 = *((unsigned long long*)$start+1)\n'
         '   set $old2 = *((unsigned long long*)$start+2)\n'
         '   printf "OLD_TRIPLET record=0x%lx p0=0x%lx v0=0x%lx p1=0x%lx v1=0x%lx p2=0x%lx v2=0x%lx\\n", $oldrecord, $old0, *(unsigned long long*)$old0, $old1, *(unsigned long long*)$old1, $old2, *(unsigned long long*)$old2\n'
+        '   set $scan_reg = *(unsigned long long*)($rsi+16)\n'
+        '   set $scan_beg = *(unsigned long long*)($scan_reg+56)\n'
+        '   set $scan_end = *(unsigned long long*)($scan_reg+64)\n'
+        '   set $scan_buckets = ($scan_end-$scan_beg)/8\n'
+        '   set $scan_store = 0\n'
+        '   if $scan_buckets > 0 && $scan_buckets < 65536\n'
+        '    set $scan_idx = *(unsigned long long*)($scan_beg+8*(0x94488499 & ($scan_buckets-1)))\n'
+        '    set $scan_n = 0\n'
+        '    while $scan_idx != -1 && $scan_n < 256\n'
+        '     set $scan_entry = *(unsigned long long*)($scan_reg+80)+32*$scan_idx\n'
+        '     if *(unsigned int*)($scan_entry+8) == 0x94488499\n'
+        '      set $scan_store = *(unsigned long long*)($scan_entry+16)\n'
+        '      set $scan_idx = -1\n'
+        '     else\n'
+        '      set $scan_idx = *(unsigned long long*)$scan_entry\n'
+        '     end\n'
+        '     set $scan_n = $scan_n+1\n'
+        '    end\n'
+        '   end\n'
+        '   if $scan_store != 0\n'
+        '    set $scan_packed = *(unsigned long long*)($scan_store+32)\n'
+        '    set $scan_count = (*(unsigned long long*)($scan_store+40)-$scan_packed)/4\n'
+        '    set $scan_pages = *(unsigned long long*)($scan_store+80)\n'
+        '    set $scan_i = 0\n'
+        '    set $scan_hits = 0\n'
+        '    set $scan_foreign = 0\n'
+        '    if $scan_count < 4096\n'
+        '     while $scan_i < $scan_count\n'
+        '      set $scan_entity = *(unsigned int*)($scan_packed+4*$scan_i)\n'
+        '      if ($scan_entity >> 18) != 0x3fff\n'
+        '       set $scan_page = *(unsigned long long*)($scan_pages+8*($scan_i>>7))\n'
+        '       if $scan_page != 0\n'
+        '        set $scan_rec = $scan_page+760*($scan_i & 127)\n'
+        '        set $scan_vec = *(unsigned long long*)($scan_rec+0x120)\n'
+        '        set $scan_vecend = *(unsigned long long*)($scan_rec+0x128)\n'
+        '        if $scan_vec != 0 && $scan_vecend >= $scan_vec && $scan_vecend-$scan_vec <= 8192\n'
+        '         set $scan_j = 0\n'
+        '         while $scan_j < ($scan_vecend-$scan_vec)/8\n'
+        '          set $scan_child = *(unsigned long long*)($scan_vec+8*$scan_j)\n'
+        '          if $scan_child == $old0 || $scan_child == $old1 || $scan_child == $old2\n'
+        '           set $scan_hits = $scan_hits+1\n'
+        '           if $scan_rec != $oldrecord\n'
+        '            set $scan_foreign = $scan_foreign+1\n'
+        '            printf "ALIAS_SAME_REGISTRY other_record=0x%lx child=0x%lx\\n", $scan_rec, $scan_child\n'
+        '           end\n'
+        '          end\n'
+        '          set $scan_j = $scan_j+1\n'
+        '         end\n'
+        '        end\n'
+        '       end\n'
+        '      end\n'
+        '      set $scan_i = $scan_i+1\n'
+        '     end\n'
+        '     printf "ALIAS_SCAN_SAME_REGISTRY records=%lu matching_slots=%lu other_record_slots=%lu\\n", $scan_count, $scan_hits, $scan_foreign\n'
+        '    else\n'
+        '     printf "ALIAS_SCAN_INVALID count=%lu\\n", $scan_count\n'
+        '    end\n'
+        '   else\n'
+        '    printf "ALIAS_SCAN_NO_STORAGE\\n"\n'
+        '   end\n'
         '   enable 14\n'
         '  end\n'
         " end\n"
@@ -464,6 +524,19 @@ def main():
         result["checks"].append("native_lifetime_trace_collected")
         if result["cleanup_nonempty_logged"] == 0:
             raise RuntimeError("No nonempty OnHit cleanup record observed")
+        if (trace.count("REINIT_NONEMPTY ") != 1
+                or trace.count("OLD_TRIPLET ") != 1
+                or trace.count("TRACKED_RECORD_CLEANUP ") != 1):
+            raise RuntimeError("Targeted nonempty reinit / old-triplet / retirement chain missing")
+        scans = re.findall(
+            r"ALIAS_SCAN_SAME_REGISTRY records=(\d+) matching_slots=(\d+) other_record_slots=(\d+)",
+            trace,
+        )
+        if len(scans) != 1 or int(scans[0][1]) != 3 or int(scans[0][2]) != 0:
+            raise RuntimeError(f"Existing ECS storage alias scan inconclusive: {scans}")
+        if "OLD_CHILD_DEALLOC " in trace:
+            raise RuntimeError("Old child was deallocated in baseline; missing-release premise changed")
+        result["checks"].append("old_triplet_unique_in_live_projectile_storage")
         result["status"] = "PASS"
     except BaseException as error:
         result["error"] = f"{type(error).__name__}: {error}"
