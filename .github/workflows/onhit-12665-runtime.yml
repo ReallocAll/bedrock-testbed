@@ -1,0 +1,68 @@
+name: Isolated BDS 1.26.65 OnHit Runtime candidate
+
+on:
+  push:
+    branches: [test/onhit-12665-runtime]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patched-ownership:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ReallocAll/endstone
+          ref: 1fad28dccf2b8ce9c4d8752a5c55d3c38950a589
+          path: endstone-src
+          fetch-depth: 0
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: ./endstone-src/.github/actions/setup-clang
+      - uses: astral-sh/setup-uv@v5
+      - name: Build and install exact patched Endstone
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C endstone-src rev-parse HEAD)" = 1fad28dccf2b8ce9c4d8752a5c55d3c38950a589
+          sudo apt-get install -y --no-install-recommends libelf-dev gdb binutils
+          python -m pip install conan ninja
+          python -m venv .venv-server
+          .venv-server/bin/python -m pip install -v ./endstone-src
+          .venv-server/bin/python -m pip install 'git+https://github.com/ReallocAll/endstone-bot.git@4bd0691f1ef0f551e5ba258d4747b35a3b748177'
+          .venv-server/bin/python -m pip check
+          .venv-server/bin/python -c 'import importlib.metadata as m; print("PATCHED_ENDSTONE_VERSION",m.version("endstone"))'
+      - name: Trace actual deletion on patched Linux BDS
+        shell: bash
+        run: |
+          python -m py_compile server.py onhit_12665_probe.py
+          python onhit_12665_probe.py --server-python .venv-server/bin/python
+      - name: Print decisive events
+        if: always()
+        run: |
+          if test -f work-onhit65/result.json; then cat work-onhit65/result.json; fi
+          if test -f work-onhit65/ownership-gdb.log; then
+            grep -E 'REINIT_NONEMPTY|OLD_TRIPLET|FINAL_TRIPLET|WATCHED_CHILD_DEALLOC|DELETING_DTOR|TRACKED_RECORD_CLEANUP|COPY_NONEMPTY|Error|warning' work-onhit65/ownership-gdb.log | tail -120 || true
+          fi
+          if test -f work-onhit65/bds.log; then tail -n 45 work-onhit65/bds.log; fi
+      - name: Preserve patched native trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onhit-12665-patched-native-ownership
+          path: |
+            work-onhit65/result.json
+            work-onhit65/ownership-gdb.log
+            work-onhit65/bds.log
+            work-onhit65/server/version.txt
+          if-no-files-found: warn
+          retention-days: 14

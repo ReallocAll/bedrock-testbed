@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+from importlib.metadata import version as distribution_version
 import json
 import re
 import shutil
@@ -16,7 +17,7 @@ from server import ROOT, Server, configure
 
 WORK = ROOT / "work-onhit65"
 BDS = "26.65"
-ENDSTONE = "0.11.16"
+ENDSTONE = distribution_version("endstone")
 BOT = "OnHitTarget"
 
 
@@ -178,6 +179,7 @@ def start_trace(server: Server, folder: Path):
         "set $old1 = 0\n"
         "set $old2 = 0\n"
         "set $oldrecord = 0\n"
+        "set $watch_stage = 0\n"
         f"break *0x{bias + 0x7757090:x}\n"
         "commands 1\n"
         " silent\n"
@@ -207,7 +209,11 @@ def start_trace(server: Server, folder: Path):
         "  set $nonempty_cleanup = $nonempty_cleanup + 1\n"
         '  if $oldrecord != 0 && $rdi == $oldrecord\n'
         '   printf "TRACKED_RECORD_CLEANUP record=0x%lx old0=0x%lx old1=0x%lx old2=0x%lx\\n", $rdi, $old0, $old1, $old2\n'
-        '   disable 14\n'
+        '   set $old0 = *(unsigned long long*)$start\n'
+        '   set $old1 = *((unsigned long long*)$start+1)\n'
+        '   set $old2 = *((unsigned long long*)$start+2)\n'
+        '   printf "FINAL_TRIPLET record=0x%lx p0=0x%lx p1=0x%lx p2=0x%lx\\n", $rdi, $old0, $old1, $old2\n'
+        '   set $watch_stage = 2\n'
         '   set $oldrecord = 0\n'
         '  end\n'
         "  if $nonempty_cleanup <= 160\n"
@@ -248,6 +254,7 @@ def start_trace(server: Server, folder: Path):
         '  printf "REINIT_NONEMPTY record=0x%lx first=0x%lx count=%lu\\n", $rdi, *(unsigned long long*)$start, ($end-$start)/8\n'
         '  if $end-$start == 24\n'
         '   set $oldrecord = $rdi\n'
+        '   set $watch_stage = 1\n'
         '   set $old0 = *(unsigned long long*)$start\n'
         '   set $old1 = *((unsigned long long*)$start+1)\n'
         '   set $old2 = *((unsigned long long*)$start+2)\n'
@@ -327,7 +334,7 @@ def start_trace(server: Server, folder: Path):
         + f"break *0x{bias + 0x41FB010:x} if $old0 != 0 && ($rdi == $old0 || $rdi == $old1 || $rdi == $old2)\n"
         + "commands 14\n"
         + " silent\n"
-        + ' printf "OLD_CHILD_DEALLOC object=0x%lx size=%lu\\n", $rdi, $rsi\n'
+        + ' printf "WATCHED_CHILD_DEALLOC stage=%d object=0x%lx size=%lu\\n", $watch_stage, $rdi, $rsi\n'
         + " continue\n"
         + "end\n"
         + "disable 14\n"
@@ -534,9 +541,39 @@ def main():
         )
         if len(scans) != 1 or int(scans[0][1]) != 3 or int(scans[0][2]) != 0:
             raise RuntimeError(f"Existing ECS storage alias scan inconclusive: {scans}")
-        if "OLD_CHILD_DEALLOC " in trace:
-            raise RuntimeError("Old child was deallocated in baseline; missing-release premise changed")
-        result["checks"].append("old_triplet_unique_in_live_projectile_storage")
+        def triplet(pattern):
+            match = re.search(pattern, trace)
+            if not match:
+                raise RuntimeError("Missing ownership triplet: " + pattern)
+            return [int(address, 16) for address in match.groups()]
+
+        old = triplet(r"OLD_TRIPLET record=0x[0-9a-f]+ p0=0x([0-9a-f]+) v0=.*? p1=0x([0-9a-f]+) v1=.*? p2=0x([0-9a-f]+) v2=")
+        final = triplet(r"FINAL_TRIPLET record=0x[0-9a-f]+ p0=0x([0-9a-f]+) p1=0x([0-9a-f]+) p2=0x([0-9a-f]+)")
+        if len(set(old + final)) != 6:
+            raise RuntimeError("Old and replacement children not distinct by address in observed generation")
+        deallocated = {
+            stage: [int(address, 16) for address in re.findall(
+                rf"WATCHED_CHILD_DEALLOC stage={stage} object=0x([0-9a-f]+)", trace
+            )]
+            for stage in (1, 2)
+        }
+        for stage, expected in ((1, old), (2, final)):
+            if sorted(deallocated[stage]) != sorted(expected):
+                raise RuntimeError(
+                    f"Native deallocation mismatch stage={stage}: expected={expected}, observed={deallocated[stage]}"
+                )
+        destroyed = [
+            int(address, 16) for address in re.findall(
+                r"(?:IMPACT_DELETING_DTOR|OTHER_DELETING_DTOR type=[A-Za-z]+) object=0x([0-9a-f]+)",
+                trace,
+            )
+        ]
+        for address in old + final:
+            if destroyed.count(address) != 1:
+                raise RuntimeError(f"Child 0x{address:x} has {destroyed.count(address)} deleting-destructor events")
+        result["old_children_deallocated_once"] = len(old)
+        result["replacement_children_deallocated_once"] = len(final)
+        result["checks"].append("old_and_replacement_children_destroyed_and_deallocated_once")
         result["status"] = "PASS"
     except BaseException as error:
         result["error"] = f"{type(error).__name__}: {error}"
