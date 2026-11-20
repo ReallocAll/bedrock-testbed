@@ -153,6 +153,9 @@ def main():
             result["checks"].append("server_inventory_item_count_increased")
 
         if args.place_collected:
+            # Normalize the reach/orientation setup after the variable-length pickup.
+            server.command("tp EndPilotTest 0.5 100 0.5")
+            time.sleep(0.8)
             server_has("successfully found", server.command("testforblock 2 100 1 air"))
             result["checks"].append("bds_placement_target_initially_air")
             send("watch")
@@ -166,6 +169,8 @@ def main():
             send("place")
             submitted = json.loads(until("placement_submitted="))
             assert submitted["tick"] > 0, submitted
+            px, _, pz = submitted["player_position"]
+            assert abs(px - 0.5) < 0.3 and abs(pz - 0.5) < 0.3, submitted
             block = json.loads(until("placement_block=", timeout=10))
             assert block["position"] == [2, 100, 1] and block["runtime_id"] != 0xDBF44120, block
             result["client_placement_block"] = block
