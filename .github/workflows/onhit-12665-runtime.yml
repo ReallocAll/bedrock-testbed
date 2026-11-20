@@ -90,7 +90,7 @@ jobs:
           os.environ.pop("MALLOC_CONF", None)
           sys.argv = ["onhit_12665_probe.py", "--server-python", ".venv-server/bin/python"]
           from onhit_12665_probe import main
-          main()
+          raise SystemExit(main())
           PY
       - name: Diagnose upstream-mimalloc startup failure
         if: failure() && steps.upstream_mimalloc.outcome == 'failure'
@@ -163,7 +163,7 @@ jobs:
           os.environ.pop("MALLOC_CONF", None)
           sys.argv = ["onhit_12665_probe.py", "--server-python", ".venv-server/bin/python"]
           from onhit_12665_probe import main
-          main()
+          raise SystemExit(main())
           PY
       - name: Print decisive events
         if: always()
