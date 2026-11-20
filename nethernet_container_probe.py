@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", type=Path, required=True)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
+    parser.add_argument("--take", action="store_true", help="take half the chest stack")
     args = parser.parse_args()
     work = ROOT / "work"
     if work.exists():
@@ -60,7 +61,8 @@ def main():
         url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
                else "raknet://127.0.0.1:19132")
         client = subprocess.Popen(
-            [sys.executable, str(args.probe.absolute()), url],
+            [sys.executable, str(args.probe.absolute()), url]
+            + (["--take-count", "2", "--destination-slot", "2"] if args.take else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -144,6 +146,15 @@ def main():
         assert item["slot"] == 0 and item["item_id"] > 0 and item["stack_size"] == 4, contents
         result["server_chest_contents"] = contents
         result["checks"].append("server_confirmed_chest_slots")
+
+        if args.take:
+            transfer = json.loads(until("container_take_response="))
+            assert transfer["request_id"] < 0 and transfer["request_id"] % 2 != 0, transfer
+            assert transfer["result"] == "SUCCESS", transfer
+            assert transfer["chest_slot_count"] == 2, transfer
+            assert transfer["inventory_count"] == 2, transfer
+            result["transfer"] = transfer
+            result["checks"].append("server_accepted_chest_stack_split_into_inventory")
 
         send("close_window")
         closed = json.loads(until("container_closed="))
