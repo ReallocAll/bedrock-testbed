@@ -180,6 +180,9 @@ def start_trace(server: Server, folder: Path):
         "set $old2 = 0\n"
         "set $oldrecord = 0\n"
         "set $watch_stage = 0\n"
+        "set $freed0 = 0\n"
+        "set $freed1 = 0\n"
+        "set $freed2 = 0\n"
         f"break *0x{bias + 0x7757090:x}\n"
         "commands 1\n"
         " silent\n"
@@ -214,6 +217,10 @@ def start_trace(server: Server, folder: Path):
         '   set $old2 = *((unsigned long long*)$start+2)\n'
         '   printf "FINAL_TRIPLET record=0x%lx p0=0x%lx p1=0x%lx p2=0x%lx\\n", $rdi, $old0, $old1, $old2\n'
         '   set $watch_stage = 2\n'
+        '   set $freed0 = 0\n'
+        '   set $freed1 = 0\n'
+        '   set $freed2 = 0\n'
+        '   enable 14\n'
         '   set $oldrecord = 0\n'
         '  end\n'
         "  if $nonempty_cleanup <= 160\n"
@@ -255,6 +262,9 @@ def start_trace(server: Server, folder: Path):
         '  if $end-$start == 24\n'
         '   set $oldrecord = $rdi\n'
         '   set $watch_stage = 1\n'
+        '   set $freed0 = 0\n'
+        '   set $freed1 = 0\n'
+        '   set $freed2 = 0\n'
         '   set $old0 = *(unsigned long long*)$start\n'
         '   set $old1 = *((unsigned long long*)$start+1)\n'
         '   set $old2 = *((unsigned long long*)$start+2)\n'
@@ -334,8 +344,26 @@ def start_trace(server: Server, folder: Path):
         + f"break *0x{bias + 0x41FB010:x} if $old0 != 0 && ($rdi == $old0 || $rdi == $old1 || $rdi == $old2)\n"
         + "commands 14\n"
         + " silent\n"
-        + ' printf "WATCHED_CHILD_DEALLOC stage=%d object=0x%lx size=%lu\\n", $watch_stage, $rdi, $rsi\n'
-        + " continue\n"
+        + " if $watch_stage != 0\\n"
+        + "  if $rdi == $old0 && $freed0 == 0\\n"
+        + "   set $freed0 = 1\\n"
+        + "  else\\n"
+        + "   if $rdi == $old1 && $freed1 == 0\\n"
+        + "    set $freed1 = 1\\n"
+        + "   else\\n"
+        + "    if $rdi == $old2 && $freed2 == 0\\n"
+        + "     set $freed2 = 1\\n"
+        + "    end\\n"
+        + "   end\\n"
+        + "  end\\n"
+        + '  printf "WATCHED_CHILD_DEALLOC stage=%d object=0x%lx size=%lu\\\\n", $watch_stage, $rdi, $rsi\\n'
+        + "  if $freed0 && $freed1 && $freed2\\n"
+        + '   printf "TRIPLET_RELEASE_COMPLETE stage=%d\\\\n", $watch_stage\\n'
+        + "   disable 14\\n"
+        + "   set $watch_stage = 0\\n"
+        + "  end\\n"
+        + " end\\n"
+        + " continue\\n"
         + "end\n"
         + "disable 14\n"
         + "continue\n",
@@ -534,12 +562,15 @@ def main():
         result["checks"].append("arena_departure_and_return")
         for _ in range(2):
             time.sleep(8)
-        server.stop()
-        server = None
+        # The tracked reinit and retirement already happened during the workload.
+        # Detach GDB before shutdown to avoid debugger overhead stalling BDS stop.
         if gdb.poll() is None:
-            gdb.wait(timeout=20)
+            gdb.terminate()
+            gdb.wait(timeout=15)
         if thread is not None:
             thread.join(timeout=5)
+        server.stop()
+        server = None
         trace = log.read_text() if log else ""
         result["copy_payload_entries"] = trace.count("COPY_PAYLOAD ") 
         result["copy_nonempty"] = trace.count("COPY_NONEMPTY ")
@@ -572,6 +603,9 @@ def main():
         final = triplet(r"FINAL_TRIPLET record=0x[0-9a-f]+ p0=0x([0-9a-f]+) p1=0x([0-9a-f]+) p2=0x([0-9a-f]+)")
         if len(set(old)) != 3 or len(set(final)) != 3:
             raise RuntimeError("Expected three distinct owned children at each recorded site")
+        for stage in (1, 2):
+            if trace.count(f"TRIPLET_RELEASE_COMPLETE stage={stage}") != 1:
+                raise RuntimeError(f"Tracked deallocation triplet did not complete at stage={stage}")
         deallocated = {
             stage: [int(address, 16) for address in re.findall(
                 rf"WATCHED_CHILD_DEALLOC stage={stage} object=0x([0-9a-f]+)", trace
