@@ -85,7 +85,7 @@ def main() -> int:
         configure(properties, args.transport)
         if args.refused:
             content = properties.read_text()
-            configured = re.sub(r"(?m)^max-players=\\d+$", "max-players=1", content)
+            configured = re.sub(r"(?m)^max-players=\d+$", "max-players=1", content)
             if configured == content:
                 raise AssertionError("BDS bootstrap server.properties has no max-players setting")
             properties.write_text(configured)
