@@ -138,6 +138,12 @@ def start_trace(server: Server, folder: Path):
         " end\n"
         " continue\n"
         "end\n"
+        f"break *0x{bias + 0x7758440:x}\n"
+        "commands 5\n"
+        " silent\n"
+        ' printf "COPY_PAYLOAD destination=0x%lx source=0x%lx\\n", $rdi, $rsi\n'
+        " continue\n"
+        "end\n"
         "continue\n",
         encoding="ascii",
     )
@@ -155,7 +161,7 @@ def start_trace(server: Server, folder: Path):
             for line in process.stdout:
                 file.write(line)
                 file.flush()
-                if "Breakpoint 4 at" in line:
+                if "Breakpoint 5 at" in line:
                     ready.set()
 
     thread = threading.Thread(target=capture, daemon=True)
@@ -244,10 +250,13 @@ def main():
         result["checks"].append("real_simulated_player_and_arena")
         gdb, thread, log, bias = start_trace(server, folder)
         result["elf_load_bias"] = f"0x{bias:x}"
-        result["checks"].append("four_native_entry_breakpoints_armed")
+        result["checks"].append("five_native_entry_breakpoints_armed")
         for x,z in ((8,11),(10,12),(6,12)):
             command_confirm(server, f"summon shulker {x} 221 {z}", "successfully summoned", 15)
         result["checks"].append("three_shulkers_summoned")
+        for mob, x, z in (("skeleton", 4, 12), ("blaze", 12, 12), ("witch", 8, 13)):
+            command_confirm(server, f"summon {mob} {x} 221 {z}", "successfully summoned", 15)
+        result["checks"].append("skeleton_blaze_witch_summoned")
         result["shulker_bullet_observed"] = observe_bullet(server)
         if not result["shulker_bullet_observed"]:
             raise RuntimeError("No real shulker bullet observed")
@@ -261,6 +270,7 @@ def main():
         if thread is not None:
             thread.join(timeout=5)
         trace = log.read_text() if log else ""
+        result["copy_payload_entries"] = trace.count("COPY_PAYLOAD ") 
         result["copy_nonempty"] = trace.count("COPY_NONEMPTY ")
         result["copy_empty_observed"] = trace.count("COPY_EMPTY ")
         result["cleanup_nonempty_logged"] = trace.count("CLEANUP_NONEMPTY ")
@@ -289,7 +299,7 @@ def main():
             thread.join(timeout=4)
         if log and log.is_file():
             trace = log.read_text()
-            for name, marker in (("cleanup_four_logged","CLEANUP_FOUR "), ("copy_default_observed","COPY_DEFAULT "), ("copy_nonempty","COPY_NONEMPTY "), ("copy_empty_observed","COPY_EMPTY "),
+            for name, marker in (("cleanup_four_logged","CLEANUP_FOUR "), ("copy_payload_entries","COPY_PAYLOAD "), ("copy_default_observed","COPY_DEFAULT "), ("copy_nonempty","COPY_NONEMPTY "), ("copy_empty_observed","COPY_EMPTY "),
                                  ("cleanup_nonempty_logged","CLEANUP_NONEMPTY "), ("impact_deleting_dtor_observed","IMPACT_DELETING_DTOR "), ("reinit_nonempty_observed","REINIT_NONEMPTY "), ("reinit_entries_logged","REINIT_ENTRY ")):
                 result[name] = trace.count(marker)
         (WORK / "result.json").write_text(json.dumps(result, indent=2) + "\n")
