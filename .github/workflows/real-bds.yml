@@ -444,7 +444,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-bds-endpilot-network-settings-${{ matrix.transport }}
+          name: real-bds-endpilot-network-settings-${{ matrix.transport }}-${{ matrix.entity_scene }}
           path: |
             work/result.json
             work/bds.log
