@@ -115,11 +115,6 @@ on:
         required: false
         type: boolean
         default: false
-      use_item_probe:
-        description: 'Verify using a held snowball in air on both transports'
-        required: false
-        type: boolean
-        default: false
       mining_probe:
         description: 'Verify survival block mining through public SDK and real BDS'
         required: false
@@ -145,7 +140,7 @@ concurrency:
 
 jobs:
   endpilot:
-    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe && !inputs.position_probe && !inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.refusal_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && inputs.health_probe != 'true' && inputs.health_probe != 'respawn' && !inputs.hotbar_probe && !inputs.use_item_probe && !inputs.mining_probe && !inputs.pickup_probe
+    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe && !inputs.position_probe && !inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.refusal_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && inputs.health_probe != 'true' && inputs.health_probe != 'respawn' && !inputs.hotbar_probe && !inputs.mining_probe && !inputs.pickup_probe
     name: EndPilot (${{ matrix.suite }}, ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
@@ -237,13 +232,13 @@ jobs:
           retention-days: 14
 
   network_settings:
-    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.position_probe || inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.identity_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || (inputs.health_probe == 'true' || inputs.health_probe == 'respawn') || inputs.hotbar_probe || inputs.use_item_probe || inputs.mining_probe || inputs.pickup_probe)
+    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.position_probe || inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.identity_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || (inputs.health_probe == 'true' || inputs.health_probe == 'respawn') || inputs.hotbar_probe || inputs.mining_probe || inputs.pickup_probe)
     name: EndPilot (settings / ${{ matrix.transport }} / ${{ matrix.entity_scene }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        transport: ${{ fromJSON((inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || (inputs.health_probe == 'true' || inputs.health_probe == 'respawn') || inputs.hotbar_probe || inputs.use_item_probe || inputs.mining_probe || inputs.pickup_probe) && '["nethernet","raknet"]' || '["nethernet"]') }}
+        transport: ${{ fromJSON((inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || (inputs.health_probe == 'true' || inputs.health_probe == 'respawn') || inputs.hotbar_probe || inputs.mining_probe || inputs.pickup_probe) && '["nethernet","raknet"]' || '["nethernet"]') }}
         entity_scene: ${{ fromJSON(inputs.entity_probe && '["observe","attack","interact"]' || '["observe"]') }}
     timeout-minutes: 30
     env:
@@ -428,7 +423,7 @@ jobs:
             --probe endpilot-src/examples/select_hotbar.py \
             --transport "${{ matrix.transport }}"
       - name: Verify held-item air-use through public SDK on real BDS
-        if: inputs.use_item_probe
+        if: inputs.hotbar_probe
         shell: bash
         run: |
           .venv-client/bin/python nethernet_hotbar_probe.py \
@@ -455,7 +450,7 @@ jobs:
             --probe endpilot-src/examples/collect_drop.py \
             --transport "${{ matrix.transport }}" --pickup --place-collected
       - name: Verify settings or player join against fresh real BDS
-        if: "!inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && inputs.health_probe != 'true' && inputs.health_probe != 'respawn' && !inputs.hotbar_probe && !inputs.use_item_probe && !inputs.mining_probe && !inputs.pickup_probe"
+        if: "!inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && inputs.health_probe != 'true' && inputs.health_probe != 'respawn' && !inputs.hotbar_probe && !inputs.mining_probe && !inputs.pickup_probe"
         shell: bash
         run: |
           .venv-client/bin/python nethernet_settings_probe.py \
