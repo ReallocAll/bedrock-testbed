@@ -44,6 +44,7 @@ def main() -> int:
     parser.add_argument("--join", action="store_true")
     parser.add_argument("--position", action="store_true")
     parser.add_argument("--chat", action="store_true", help="Verify two BDS players exchange chat")
+    parser.add_argument("--command", action="store_true", help="Verify player command response and BDS effect")
     parser.add_argument("--refused", action="store_true", help="Require explicit full-server rejection")
     parser.add_argument("--transport", choices=("nethernet", "raknet"), default="nethernet")
     args = parser.parse_args()
@@ -136,6 +137,49 @@ def main() -> int:
                 results["checks"].append("holder_left_bds_list_empty")
 
             asyncio.run(run_full_server_probe())
+        elif args.command:
+            process = subprocess.Popen(
+                command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                server.wait_player(True, timeout=30)
+                results["checks"].append("command_player_joined_real_bds")
+                # Establish the precondition through BDS, not a client prediction.
+                server.command("setblock 1 99 0 stone")
+                time.sleep(0.5)
+                process.stdin.write("go\n")
+                process.stdin.flush()
+                stdout, stderr = process.communicate(timeout=35)
+                if stdout:
+                    print("[command] " + stdout.strip(), flush=True)
+                if stderr:
+                    print(stderr, file=sys.stderr, flush=True)
+                match = re.search(r"^command_result=(.+)$", stdout, re.M)
+                if process.returncode or not match or "disconnected EndPilotTest" not in stdout:
+                    raise AssertionError(f"Command example did not complete: {stdout} {stderr}")
+                output = json.loads(match.group(1))
+                if output["success_count"] < 1 or not any(
+                    message["successful"] for message in output["messages"]
+                ):
+                    raise AssertionError(f"BDS did not report a successful player command: {output}")
+                results["command_output"] = output
+                results["checks"].append("matched_typed_command_output_received")
+                offset = server.command("testforblock 1 99 0 gold_block")
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline:
+                    if any("successfully found" in line.lower() for line in server.snapshot(offset)):
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise AssertionError(f"BDS never confirmed gold block: {server.snapshot(offset)}")
+                results["checks"].append("bds_testforblock_confirmed_command_effect")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
+            server.wait_player(False, timeout=20)
+            results["checks"].append("command_player_left_bds_list_empty")
         elif args.chat:
             process = subprocess.Popen(
                 command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
