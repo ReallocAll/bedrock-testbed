@@ -1,4 +1,4 @@
-"""Compare public SDK forward, backward, lateral and sprinting input against real BDS."""
+"""Compare public SDK cardinal, diagonal and sprinting input against real BDS."""
 
 from __future__ import annotations
 
@@ -163,6 +163,32 @@ def main():
         assert abs(right_end["y"] - right_start["y"]) < 0.2, (right_start, right_end)
         result["checks"].append("independent_bds_right_strafe")
 
+        diagonal = {}
+        for side in ("left", "right"):
+            server.command("tp EndPilotTest 0.5 100 0.5")
+            time.sleep(0.7)
+            diagonal_start = server_position(server)
+            send("diagonal-" + side)
+            diagonal_ticks = int(until(f"diagonal_{side}_ticks="))
+            assert diagonal_ticks == 18, (side, diagonal_ticks)
+            time.sleep(0.3)
+            diagonal_end = server_position(server)
+            dx = diagonal_end["x"] - diagonal_start["x"]
+            dz = diagonal_end["z"] - diagonal_start["z"]
+            dy = diagonal_end["y"] - diagonal_start["y"]
+            assert abs(dy) < 0.2 and dz > 0.5, (side, diagonal_start, diagonal_end)
+            assert (dx > 0.5 if side == "left" else dx < -0.5), (
+                side, diagonal_start, diagonal_end)
+            # Both full-strength key flags are sent, but client travel()
+            # normalizes the diagonal vector before computing movement.
+            assert abs(dx) < walk_distance * 0.95, (side, dx, walk_distance)
+            assert dz < walk_distance * 0.95, (side, dz, walk_distance)
+            diagonal[side] = {
+                "ticks": diagonal_ticks, "start": diagonal_start,
+                "end": diagonal_end, "delta": {"x": dx, "y": dy, "z": dz},
+            }
+        result["checks"].append("independent_bds_normalized_diagonal_movement")
+
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
         sprint_start = server_position(server)
@@ -179,6 +205,7 @@ def main():
         sprint_distance = sprinted["z"] - sprint_start["z"]
         result["movement"] = {
             "walk_ticks": walk_ticks, "backward_ticks": backward_ticks,
+            "diagonal": diagonal,
             "left_ticks": left_ticks, "right_ticks": right_ticks,
             "left_start": left_start, "left_end": left_end,
             "right_start": right_start, "right_end": right_end,
