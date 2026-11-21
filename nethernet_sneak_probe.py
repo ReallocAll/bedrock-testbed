@@ -13,6 +13,7 @@ import traceback
 from importlib.metadata import distribution
 from pathlib import Path
 
+from nethernet_walk_probe import filled
 from server import ROOT, Server, configure
 
 
@@ -119,6 +120,10 @@ def main():
         result["checks"].append("server_confirmed_player_join")
         # Join does not imply a post-spawn position sync. Force an authoritative
         # teleport so the SDK input stream starts from server-owned coordinates.
+        # A solid floor is required: otherwise this test may compare sneak
+        # states while the player is falling into an unprepared world.
+        filled(server, "fill -3 100 -3 3 104 3 air")
+        filled(server, "fill -3 99 -3 3 99 3 stone")
         server.command("tp EndPilotTest 0.5 100 0.5")
 
         send("sneak")
