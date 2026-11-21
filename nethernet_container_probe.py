@@ -27,6 +27,8 @@ def main():
     parser.add_argument("--take", action="store_true", help="take half the chest stack")
     parser.add_argument("--chat-during-take", action="store_true",
                         help="submit chat while an item response is pending")
+    parser.add_argument("--server-grant-during-take", action="store_true",
+                        help="BDS grants another inventory stack after the chest request is sent")
     parser.add_argument("--put", action="store_true", help="take two and place one back")
     parser.add_argument("--equip", action="store_true", help="take a helmet and equip it after closing")
     parser.add_argument("--server-close", action="store_true", help="BDS breaks the open chest")
@@ -70,8 +72,9 @@ def main():
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url]
             + (["--take-count", "1" if args.equip else "2", "--destination-slot", "2"]
-               if (args.take or args.put or args.equip or args.drop or args.chat_during_take) else [])
+               if (args.take or args.put or args.equip or args.drop or args.chat_during_take or args.server_grant_during_take) else [])
             + (["--chat-during-take"] if args.chat_during_take else [])
+            + (["--server-grant-during-take"] if args.server_grant_during_take else [])
             + (["--put-back-count", "1"] if args.put else [])
             + (["--equip-armor-slot", "0"] if args.equip else [])
             + (["--expect-server-close"] if args.server_close else [])
@@ -168,6 +171,13 @@ def main():
         result["server_chest_contents"] = contents
         result["checks"].append("server_confirmed_chest_slots")
 
+        if args.server_grant_during_take:
+            until("server_grant_after_request_sent")
+            start = server.command("replaceitem entity EndPilotTest slot.hotbar 4 dirt 1")
+            server_has("replaced", start)
+            send("server_grant_done")
+            result["checks"].append("bds_granted_independent_hotbar_slot_after_request_sent")
+
         if args.chat_during_take:
             chat = json.loads(until("chat_during_take="))
             assert chat == {
@@ -178,15 +188,36 @@ def main():
             result["chat_during_take"] = chat
             result["checks"].append("bds_received_chat_while_item_response_was_pending")
 
-        if args.take or args.put or args.equip or args.drop or args.chat_during_take:
+        if args.server_grant_during_take:
+            grant = json.loads(until("server_grant_observed="))
+            assert grant["slot"] == 4 and grant["stack_size"] == 1, grant
+            assert grant["item_id"] == item["item_id"], grant
+            assert grant["inventory_count"] == 3, grant
+            result["server_grant"] = grant
+            result["checks"].append("client_observed_independent_server_inventory_update")
+
+        if (args.take or args.put or args.equip or args.drop
+                or args.chat_during_take or args.server_grant_during_take):
             transfer = json.loads(until("container_take_response="))
             assert transfer["request_id"] < 0 and transfer["request_id"] % 2 != 0, transfer
             assert transfer["result"] == "SUCCESS", transfer
             assert transfer["chest_slot_count"] == (0 if args.equip else 2), transfer
-            assert transfer["inventory_count"] == (1 if args.equip else 2), transfer
+            assert transfer["inventory_count"] == (3 if args.server_grant_during_take else
+                                                   1 if args.equip else 2), transfer
             result["transfer"] = transfer
             result["checks"].append("server_accepted_chest_stack_split_into_inventory")
-            if args.chat_during_take:
+            if args.server_grant_during_take:
+                for slot, block, quantity in ((2, "diamond_block", 2),
+                                              (4, "emerald_block", 1)):
+                    server.command(
+                        f"execute as @a[hasitem={{item=dirt,quantity={quantity},"
+                        f"location=slot.hotbar,slot={slot}}}] "
+                        f"run setblock {slot} 100 1 {block}"
+                    )
+                    start = server.command(f"testforblock {slot} 100 1 {block}")
+                    server_has("successfully found", start)
+                result["checks"].append("bds_independently_confirmed_both_inventory_slots")
+            if args.chat_during_take and not args.server_grant_during_take:
                 server.command(
                     "execute as @a[hasitem={item=dirt,quantity=2}] "
                     "run setblock 2 100 0 gold_block"
