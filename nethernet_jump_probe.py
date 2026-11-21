@@ -31,9 +31,13 @@ def main():
     direction.add_argument("--backward", action="store_true", help="Exercise a backward-moving jump")
     direction.add_argument("--left", action="store_true", help="Exercise a left-strafing jump")
     direction.add_argument("--right", action="store_true", help="Exercise a right-strafing jump")
+    direction.add_argument("--forward-left", action="store_true", help="Exercise a forward-left jump")
+    direction.add_argument("--forward-right", action="store_true", help="Exercise a forward-right jump")
     args = parser.parse_args()
-    moving_jump = args.forward or args.backward or args.left or args.right
-    direction = ("backward" if args.backward else "left" if args.left
+    moving_jump = (args.forward or args.backward or args.left or args.right
+                   or args.forward_left or args.forward_right)
+    direction = ("forward_left" if args.forward_left else "forward_right" if args.forward_right
+                 else "backward" if args.backward else "left" if args.left
                  else "right" if args.right else "forward")
 
     work = ROOT / "work"
@@ -69,8 +73,8 @@ def main():
         url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
                else "raknet://127.0.0.1:19132")
         client_command = [sys.executable, str(args.probe.absolute()), url]
-        if args.left or args.right:
-            client_command.append(direction)
+        if args.left or args.right or args.forward_left or args.forward_right:
+            client_command.append("left" if args.left or args.forward_left else "right")
         client = subprocess.Popen(
             client_command,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -148,7 +152,14 @@ def main():
         assert abs(landed["y"] - stable["y"]) < 0.2, result["jump"]
         result["checks"].append("independent_bds_querytarget_landing")
         if moving_jump:
-            if args.left or args.right:
+            if args.forward_left or args.forward_right:
+                displacement_x = landed["x"] - stable["x"]
+                displacement_z = landed["z"] - stable["z"]
+                assert (displacement_x > 0.5 if args.forward_left else displacement_x < -0.5), result["jump"]
+                assert displacement_z > 0.5, result["jump"]
+                result["jump"]["displacement_x"] = displacement_x
+                result["jump"]["displacement_z"] = displacement_z
+            elif args.left or args.right:
                 displacement_x = landed["x"] - stable["x"]
                 assert (displacement_x > 0.5 if args.left else displacement_x < -0.5), result["jump"]
                 assert abs(landed["z"] - stable["z"]) < 0.35, result["jump"]
