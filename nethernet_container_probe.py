@@ -435,6 +435,8 @@ def main():
             server_has("successfully found", start)
             result["checks"].append("bds_independently_confirmed_helmet_returned_to_hotbar")
 
+            until("armor_reequip_ready")
+            send("armor_reequip")
             reequip = json.loads(until("armor_reequip_response="))
             assert reequip["request_id"] == -7 and reequip["result"] == "SUCCESS", reequip
             assert reequip["armor_item_id"] == item["item_id"], reequip
