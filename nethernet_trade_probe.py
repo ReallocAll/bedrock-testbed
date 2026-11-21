@@ -176,6 +176,33 @@ def main():
             for c in staged["input_containers"]
         ), staged
         result["checks"].append("server_accepted_trade_ingredient_and_reconciled_slots")
+
+        exchanged = json.loads(until("trade_exchange_result=", timeout=30))
+        result["exchange"] = exchanged
+        assert exchanged["result"] == "SUCCESS", exchanged
+        assert exchanged["request_id"] < staged["request_id"], exchanged
+        assert exchanged["output_slot"] == 9, exchanged
+        assert exchanged["output_id"] is not None and exchanged["output_id"] != 0, exchanged
+        assert exchanged["output_count"] == int(selected["sell"]["count"]), exchanged
+        assert any(
+            c["name"] in ("HOTBAR_CONTAINER", "INVENTORY_CONTAINER",
+                          "COMBINED_HOTBAR_AND_INVENTORY_CONTAINER")
+            and any(s["slot"] == 9 and s["amount"] == int(selected["sell"]["count"])
+                    for s in c["slots"])
+            for c in exchanged["containers"]
+        ), exchanged
+        result["checks"].append("server_accepted_exchange_and_output_slot_reconciled")
+
+        # Independent BDS inventory oracle; SDK response alone is insufficient.
+        sell = selected["sell"]
+        server.command(
+            f"execute as @a[hasitem={{item={sell['name']},quantity={sell['count']}..}}] "
+            "run setblock 6 100 0 gold_block"
+        )
+        start = server.command("testforblock 6 100 0 gold_block")
+        wait_server("successfully found", start)
+        result["checks"].append("independent_bds_traded_output_inventory_oracle")
+
         closed = int(until("trade_window_closed=", timeout=15))
         assert closed == offers["window_id"], (closed, offers)
         result["checks"].append("trade_close_ack_matches_window")
