@@ -122,6 +122,10 @@ def main():
         # teleport so the SDK input stream starts from server-owned coordinates.
         # A solid floor is required: otherwise this test may compare sneak
         # states while the player is falling into an unprepared world.
+        # RakNet may spawn before the target area is loaded. Prime it as in
+        # nethernet_entity_probe before running any fill command.
+        server.command("tp EndPilotTest 0.5 100 0.5")
+        time.sleep(3.0)
         filled(server, "fill -3 100 -3 3 104 3 air")
         filled(server, "fill -3 99 -3 3 99 3 stone")
         server.command("tp EndPilotTest 0.5 100 0.5")
