@@ -140,7 +140,7 @@ concurrency:
 
 jobs:
   endpilot:
-    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe && !inputs.position_probe && !inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.refusal_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && inputs.health_probe != 'true' && inputs.health_probe != 'respawn' && inputs.health_probe != 'hunger' && !inputs.hotbar_probe && !inputs.mining_probe && !inputs.pickup_probe && (inputs.health_probe != 'container' && inputs.health_probe != 'container-take' && inputs.health_probe != 'container-put' && inputs.health_probe != 'container-equip' && inputs.health_probe != 'trade')
+    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe && !inputs.position_probe && !inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.refusal_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && inputs.health_probe != 'true' && inputs.health_probe != 'respawn' && inputs.health_probe != 'hunger' && !inputs.hotbar_probe && !inputs.mining_probe && !inputs.pickup_probe && (inputs.health_probe != 'container' && inputs.health_probe != 'container-take' && inputs.health_probe != 'container-put' && inputs.health_probe != 'container-equip' && inputs.health_probe != 'trade' && inputs.health_probe != 'container-server-close')
     name: EndPilot (${{ matrix.suite }}, ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
@@ -232,13 +232,13 @@ jobs:
           retention-days: 14
 
   network_settings:
-    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.position_probe || inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.identity_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || (inputs.health_probe == 'true' || inputs.health_probe == 'respawn' || inputs.health_probe == 'hunger') || inputs.hotbar_probe || inputs.mining_probe || inputs.pickup_probe || (inputs.health_probe == 'container' || inputs.health_probe == 'container-take' || inputs.health_probe == 'container-put' || inputs.health_probe == 'container-equip' || inputs.health_probe == 'trade'))
+    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.position_probe || inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.identity_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || (inputs.health_probe == 'true' || inputs.health_probe == 'respawn' || inputs.health_probe == 'hunger') || inputs.hotbar_probe || inputs.mining_probe || inputs.pickup_probe || (inputs.health_probe == 'container' || inputs.health_probe == 'container-take' || inputs.health_probe == 'container-put' || inputs.health_probe == 'container-equip' || inputs.health_probe == 'container-server-close' || inputs.health_probe == 'trade'))
     name: EndPilot (settings / ${{ matrix.transport }} / ${{ matrix.entity_scene }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        transport: ${{ fromJSON((inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || (inputs.health_probe == 'true' || inputs.health_probe == 'respawn' || inputs.health_probe == 'hunger') || inputs.hotbar_probe || inputs.mining_probe || inputs.pickup_probe || (inputs.health_probe == 'container' || inputs.health_probe == 'container-take' || inputs.health_probe == 'container-put' || inputs.health_probe == 'container-equip' || inputs.health_probe == 'trade')) && '["nethernet","raknet"]' || '["nethernet"]') }}
+        transport: ${{ fromJSON((inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || (inputs.health_probe == 'true' || inputs.health_probe == 'respawn' || inputs.health_probe == 'hunger') || inputs.hotbar_probe || inputs.mining_probe || inputs.pickup_probe || (inputs.health_probe == 'container' || inputs.health_probe == 'container-take' || inputs.health_probe == 'container-put' || inputs.health_probe == 'container-equip' || inputs.health_probe == 'container-server-close' || inputs.health_probe == 'trade')) && '["nethernet","raknet"]' || '["nethernet"]') }}
         entity_scene: ${{ fromJSON(inputs.entity_probe && '["observe","attack","interact"]' || '["observe"]') }}
     timeout-minutes: 30
     env:
@@ -414,14 +414,14 @@ jobs:
             --transport "${{ matrix.transport }}" \
             ${{ inputs.health_probe == 'respawn' && '--respawn' || inputs.health_probe == 'hunger' && '--hunger' || '' }}
       - name: Verify public chest opening and server container window
-        if: (inputs.health_probe == 'container' || inputs.health_probe == 'container-take' || inputs.health_probe == 'container-put' || inputs.health_probe == 'container-equip')
+        if: (inputs.health_probe == 'container' || inputs.health_probe == 'container-take' || inputs.health_probe == 'container-put' || inputs.health_probe == 'container-equip' || inputs.health_probe == 'container-server-close')
         shell: bash
         run: |
           .venv-client/bin/python nethernet_container_probe.py \
             --server-python .venv-server/bin/python \
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --probe endpilot-src/examples/open_container.py \
-            --transport "${{ matrix.transport }}" ${{ inputs.health_probe == 'container-take' && '--take' || inputs.health_probe == 'container-put' && '--put' || inputs.health_probe == 'container-equip' && '--equip' || '' }}
+            --transport "${{ matrix.transport }}" ${{ inputs.health_probe == 'container-take' && '--take' || inputs.health_probe == 'container-put' && '--put' || inputs.health_probe == 'container-equip' && '--equip' || inputs.health_probe == 'container-server-close' && '--server-close' || '' }}
       - name: Verify a server-issued villager trade window and item quotes
         if: inputs.health_probe == 'trade'
         shell: bash
@@ -459,7 +459,7 @@ jobs:
             --probe endpilot-src/examples/collect_drop.py \
             --transport "${{ matrix.transport }}" --pickup --place-collected
       - name: Verify settings or player join against fresh real BDS
-        if: "!inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && inputs.health_probe != 'true' && inputs.health_probe != 'respawn' && inputs.health_probe != 'hunger' && !inputs.hotbar_probe && !inputs.mining_probe && !inputs.pickup_probe && (inputs.health_probe != 'container' && inputs.health_probe != 'container-take' && inputs.health_probe != 'container-put' && inputs.health_probe != 'container-equip' && inputs.health_probe != 'trade')"
+        if: "!inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && inputs.health_probe != 'true' && inputs.health_probe != 'respawn' && inputs.health_probe != 'hunger' && !inputs.hotbar_probe && !inputs.mining_probe && !inputs.pickup_probe && (inputs.health_probe != 'container' && inputs.health_probe != 'container-take' && inputs.health_probe != 'container-put' && inputs.health_probe != 'container-equip' && inputs.health_probe != 'trade' && inputs.health_probe != 'container-server-close')"
         shell: bash
         run: |
           .venv-client/bin/python nethernet_settings_probe.py \
