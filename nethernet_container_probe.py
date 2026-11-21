@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--put", action="store_true", help="take two and place one back")
     parser.add_argument("--equip", action="store_true", help="take a helmet and equip it after closing")
     parser.add_argument("--server-close", action="store_true", help="BDS breaks the open chest")
+    parser.add_argument("--drop", action="store_true", help="drop one item after taking two from chest")
     args = parser.parse_args()
     work = ROOT / "work"
     if work.exists():
@@ -66,10 +67,11 @@ def main():
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url]
             + (["--take-count", "1" if args.equip else "2", "--destination-slot", "2"]
-               if (args.take or args.put or args.equip) else [])
+               if (args.take or args.put or args.equip or args.drop) else [])
             + (["--put-back-count", "1"] if args.put else [])
             + (["--equip-armor-slot", "0"] if args.equip else [])
-            + (["--expect-server-close"] if args.server_close else []),
+            + (["--expect-server-close"] if args.server_close else [])
+            + (["--drop-count", "1"] if args.drop else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -120,6 +122,8 @@ def main():
         filled(server, "fill -4 99 -4 4 99 4 stone")
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.8)
+        if args.drop:
+            server.command("gamemode survival EndPilotTest")
         server.command("setblock 1 100 0 stone")
         time.sleep(0.3)
 
@@ -159,7 +163,7 @@ def main():
         result["server_chest_contents"] = contents
         result["checks"].append("server_confirmed_chest_slots")
 
-        if args.take or args.put or args.equip:
+        if args.take or args.put or args.equip or args.drop:
             transfer = json.loads(until("container_take_response="))
             assert transfer["request_id"] < 0 and transfer["request_id"] % 2 != 0, transfer
             assert transfer["result"] == "SUCCESS", transfer
@@ -194,6 +198,34 @@ def main():
             assert closed["open_window"] is False, closed
             result["checks"].append("server_confirmed_chest_window_close")
         server.wait_player(True)
+
+        if args.drop:
+            screen = json.loads(until("player_inventory_opened="))
+            assert isinstance(screen["id"], int) and screen["id"] >= 0, screen
+            result["checks"].append("server_confirmed_player_inventory_open")
+            dropped = json.loads(until("inventory_drop_response="))
+            assert dropped["request_id"] == -3, dropped
+            assert dropped["result"] == "SUCCESS", dropped
+            assert dropped["inventory_count"] == 1, dropped
+            assert dropped["item_id"] == item["item_id"], dropped
+            assert dropped["drop_item_id"] == "minecraft:dirt", dropped
+            assert dropped["drop_count"] == 1 and dropped["drop_runtime_id"] > 0, dropped
+            result["drop"] = dropped
+            result["checks"].append("server_response_and_client_item_actor_confirmed")
+            screen_closed = json.loads(until("player_inventory_closed="))
+            assert screen_closed["id"] == screen["id"] and screen_closed["open_window"] is False
+            result["checks"].append("server_confirmed_player_inventory_close")
+            server.command(
+                "execute as @a[hasitem={item=dirt,quantity=1}] "
+                "run setblock 2 100 0 gold_block"
+            )
+            start = server.command("testforblock 2 100 0 gold_block")
+            server_has("successfully found", start)
+            result["checks"].append("bds_independently_confirmed_remaining_inventory_count")
+            server.command("execute if entity @e[type=item] run setblock 3 100 0 diamond_block")
+            start = server.command("testforblock 3 100 0 diamond_block")
+            server_has("successfully found", start)
+            result["checks"].append("bds_independently_confirmed_world_drop")
 
         if args.equip:
             screen = json.loads(until("player_inventory_opened="))
