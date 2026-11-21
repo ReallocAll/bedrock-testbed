@@ -36,6 +36,8 @@ def main():
     parser.add_argument("--split", action="store_true", help="split one chest-taken stack into two player slots")
     parser.add_argument("--swap", action="store_true",
                         help="swap two different occupied player inventory slots")
+    parser.add_argument("--swap-late-grant", action="store_true",
+                        help="replace a swapped slot after BDS reply, before SDK handles it")
     args = parser.parse_args()
     work = ROOT / "work"
     if work.exists():
@@ -82,7 +84,8 @@ def main():
             + (["--expect-server-close"] if args.server_close else [])
             + (["--drop-count", "1"] if args.drop else [])
             + (["--split-slot", "3"] if args.split else [])
-            + (["--swap-slot", "3"] if args.swap else []),
+            + (["--swap-slot", "3"] if args.swap else [])
+            + (["--swap-late-grant"] if args.swap_late_grant else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -313,6 +316,17 @@ def main():
             start = server.command("replaceitem entity EndPilotTest slot.hotbar 3 stone 1")
             server_has("replaced", start)
             send("swap_grant_done")
+            if args.swap_late_grant:
+                # The real BDS swap reply has reached the client matcher.
+                # Delay only its local waiter until a later server slot grant
+                # arrives, to exercise response/InventorySlot dispatch order.
+                until("swap_reply_received_before_grant")
+                start = server.command(
+                    "replaceitem entity EndPilotTest slot.hotbar 2 diamond 1"
+                )
+                server_has("replaced", start)
+                send("swap_late_grant_done")
+                result["checks"].append("bds_granted_source_slot_after_swap_reply")
             swapped = json.loads(until("inventory_swap_response="))
             assert swapped["result"] == "SUCCESS", swapped
             assert swapped["request_id"] == -3, swapped
@@ -320,14 +334,30 @@ def main():
             stone_id = swapped["target_before"][0]
             assert stone_id > 0 and stone_id != item["item_id"], swapped
             assert swapped["target_before"][1] == 1, swapped
-            assert swapped["source_after"] == [stone_id, 1], swapped
-            assert swapped["target_after"] == [item["item_id"], 2], swapped
+            if args.swap_late_grant:
+                diamond_id = swapped["source_after"][0]
+                assert diamond_id > 0 and diamond_id not in (
+                    item["item_id"], stone_id
+                ), swapped
+                assert swapped["source_after"][1] == 1, swapped
+                assert swapped["target_after"] == [item["item_id"], 2], swapped
+                slot_oracles = (
+                    (2, "diamond", 1, "gold_block"),
+                    (3, "dirt", 2, "diamond_block"),
+                )
+                result["checks"].append(
+                    "client_preserved_newer_bds_slot_after_delayed_reply"
+                )
+            else:
+                assert swapped["source_after"] == [stone_id, 1], swapped
+                assert swapped["target_after"] == [item["item_id"], 2], swapped
+                slot_oracles = (
+                    (2, "stone", 1, "gold_block"),
+                    (3, "dirt", 2, "diamond_block"),
+                )
             result["swap"] = swapped
             result["checks"].append("server_accepted_two_occupied_inventory_slot_swap")
-            for slot, name, count, marker in (
-                (2, "stone", 1, "gold_block"),
-                (3, "dirt", 2, "diamond_block"),
-            ):
+            for slot, name, count, marker in slot_oracles:
                 server.command(
                     f"execute as @a[hasitem={{item={name},quantity={count},"
                     f"location=slot.hotbar,slot={slot}}}] "
