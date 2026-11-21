@@ -182,6 +182,11 @@ def main():
         if args.interrupt:
             until("trade_abort_ready")
             send("abort")
+            unstaged = json.loads(until("trade_unstage_result=", timeout=30))
+            assert unstaged["result"] == "SUCCESS", unstaged
+            assert unstaged["request_id"] < staged["request_id"], unstaged
+            result["unstaged"] = unstaged
+            result["checks"].append("server_accepted_trade_input_return")
             aborted = json.loads(until("trade_aborted=", timeout=30))
             assert aborted["window_id"] == offers["window_id"], aborted
             assert aborted["close_acknowledged"] is True, aborted
@@ -189,6 +194,7 @@ def main():
             assert aborted["stale_exchange_blocked"] is True, aborted
             assert aborted["original_count"] == staged["before"], aborted
             observed_return = aborted["observed_count"] >= staged["before"]
+            assert observed_return is True, aborted
             result["aborted"] = aborted
             result["checks"].append("trade_cancel_ack_and_stale_quote_rejection")
 
