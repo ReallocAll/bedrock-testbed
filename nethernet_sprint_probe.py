@@ -98,8 +98,8 @@ def main():
         # Prepare a loaded, level platform before observing vertical motion.
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
-        filled(server, "fill -3 100 -3 3 104 3 air")
-        filled(server, "fill -3 99 -3 3 99 3 stone")
+        filled(server, "fill -3 100 -3 3 104 10 air")
+        filled(server, "fill -3 99 -3 3 99 10 stone")
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
 
@@ -114,6 +114,8 @@ def main():
         assert walk_ticks == 18, walk_ticks
         time.sleep(0.3)
         walked = server_position(server)
+        assert abs(walked["y"] - stable["y"]) < 0.2, (stable, walked)
+        result["checks"].append("normal_walk_remains_grounded")
         walk_distance = walked["z"] - stable["z"]
         assert walk_distance > 0.5, (stable, walked)
         result["checks"].append("independent_bds_normal_walk")
@@ -129,6 +131,8 @@ def main():
         assert key_tick > 0 and sprint_ticks == 18 and release_tick > key_tick
         time.sleep(0.3)
         sprinted = server_position(server)
+        assert abs(sprinted["y"] - sprint_start["y"]) < 0.2, (sprint_start, sprinted)
+        result["checks"].append("sprint_remains_grounded")
         sprint_distance = sprinted["z"] - sprint_start["z"]
         result["movement"] = {
             "walk_ticks": walk_ticks, "sprint_ticks": sprint_ticks,
