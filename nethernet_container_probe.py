@@ -31,6 +31,7 @@ def main():
                         help="BDS grants another inventory stack after the chest request is sent")
     parser.add_argument("--put", action="store_true", help="take two and place one back")
     parser.add_argument("--equip", action="store_true", help="take a helmet and equip it after closing")
+    parser.add_argument("--offhand", action="store_true", help="equip BDS-granted shield to offhand")
     parser.add_argument("--server-close", action="store_true", help="BDS breaks the open chest")
     parser.add_argument("--drop", action="store_true", help="drop one item after taking two from chest")
     parser.add_argument("--split", action="store_true", help="split one chest-taken stack into two player slots")
@@ -134,6 +135,52 @@ def main():
         server.wait_player(True)
         until("spawned EndPilotTest")
         result["checks"].append("player_spawned")
+        if args.offhand:
+            server.command("tp EndPilotTest 0.5 100 0.5")
+            time.sleep(0.8)
+            filled(server, "fill -4 100 -4 4 103 4 air")
+            filled(server, "fill -4 99 -4 4 99 4 stone")
+            server.command("tp EndPilotTest 0.5 100 0.5")
+            server.command("gamemode survival EndPilotTest")
+            until("offhand_grant_ready")
+            start = server.command("replaceitem entity EndPilotTest slot.hotbar 2 shield 1")
+            server_has("replaced", start)
+            result["checks"].append("bds_granted_shield_to_hotbar")
+            send("grant")
+            equipped = json.loads(until("offhand_response="))
+            assert equipped["request_id"] == -1, equipped
+            assert equipped["result"] == "SUCCESS", equipped
+            assert equipped["shield_item_id"] > 0, equipped
+            assert equipped["source_after"] == 0, equipped
+            assert equipped["offhand_id"] == equipped["shield_item_id"], equipped
+            assert equipped["offhand_count"] == 1, equipped
+            result["offhand"] = equipped
+            result["checks"].append("item_stack_response_and_client_offhand_observed")
+            until("offhand_check_ready")
+            server.command(
+                "execute as @a[hasitem={item=shield,location=slot.weapon.offhand}] "
+                "run setblock 2 100 0 gold_block"
+            )
+            start = server.command("testforblock 2 100 0 gold_block")
+            server_has("successfully found", start)
+            result["checks"].append("bds_independently_confirmed_offhand_shield")
+            server.command(
+                "execute unless entity @a[hasitem={item=shield,location=slot.hotbar,slot=2}] "
+                "run setblock 3 100 0 diamond_block"
+            )
+            start = server.command("testforblock 3 100 0 diamond_block")
+            server_has("successfully found", start)
+            result["checks"].append("bds_confirmed_shield_removed_from_hotbar")
+            send("disconnect")
+            until("disconnected EndPilotTest")
+            assert client.wait(timeout=10) == 0
+            server.wait_player(False)
+            result["checks"].append("player_list_empty")
+            server.stop()
+            server = None
+            result["checks"].append("bds_clean_stop")
+            result["status"] = "PASS"
+            return 0
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.8)
         filled(server, "fill -4 100 -4 4 103 4 air")
