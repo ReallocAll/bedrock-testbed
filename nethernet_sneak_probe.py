@@ -117,6 +117,9 @@ def main():
         server.wait_player(True)
         until("spawned EndPilotTest")
         result["checks"].append("server_confirmed_player_join")
+        # Join does not imply a post-spawn position sync. Force an authoritative
+        # teleport so the SDK input stream starts from server-owned coordinates.
+        server.command("tp EndPilotTest 0.5 100 0.5")
 
         send("sneak")
         on_tick = int(until("sneak_on_tick="))
