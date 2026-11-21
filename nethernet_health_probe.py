@@ -145,6 +145,8 @@ def main():
             # Exercise the public SDK watcher; BDS owns the food-level changes.
             send("watch")
             until("hunger_watcher_ready")
+            # PEACEFUL automatically restores hunger and masks food exhaustion.
+            server.command("difficulty normal")
             server.command("replaceitem entity EndPilotTest slot.hotbar 0 apple 2")
             time.sleep(0.8)
             server.command("effect EndPilotTest hunger 3 100 true")
