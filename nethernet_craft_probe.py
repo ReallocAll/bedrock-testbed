@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--store", action="store_true", help="craft then store the output in a chest")
+    parser.add_argument("--grid", action="store_true", help="craft from the 2x2 grid, not auto-craft")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -125,7 +126,18 @@ def main():
         )
         server_has("gave", start)
         send("craft")
+        if args.grid:
+            staged = json.loads(until("grid_stage="))
+            result["stage"] = staged
+            assert staged["result"] == "SUCCESS", staged
+            assert staged["request_id"] < 0 and staged["request_id"] % 2 == 1, staged
+            assert staged["grid_slot"] == 28, staged
+            assert staged["source_before"] >= 1, staged
+            assert staged["source_after"] == staged["source_before"] - 1, staged
+            result["checks"].append("server_accepted_2x2_grid_ingredient")
         crafted = json.loads(until("craft_result="))
+        if args.grid:
+            assert crafted["request_id"] != staged["request_id"], (staged, crafted)
         result["craft"] = crafted
         assert crafted["result"] == "SUCCESS", crafted
         assert crafted["request_id"] < 0 and crafted["request_id"] % 2 == 1, crafted
