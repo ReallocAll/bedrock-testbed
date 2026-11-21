@@ -8,6 +8,7 @@ class CombatProbe(Plugin):
     prefix = "CombatProbe"
 
     def on_enable(self):
+        self._capture_swing_input = False
         self.register_events(self)
         self.logger.info("combat_probe_enabled")
 
@@ -15,6 +16,11 @@ class CombatProbe(Plugin):
     def on_received(self, event: PacketReceiveEvent):
         if event.packet_id == 44:
             self.logger.info(f"swing_animate_received={len(event.payload)}")
+            self._capture_swing_input = True
+        elif event.packet_id == 144 and self._capture_swing_input:
+            # Save one post-animation input for decoding with the pinned SDK codec.
+            self._capture_swing_input = False
+            self.logger.info(f"swing_input_payload={bytes(event.payload).hex()}")
         if event.packet_id == 30:
             self.logger.info(f"combat_packet_received={len(event.payload)}")
 

@@ -13,6 +13,7 @@ import traceback
 from importlib.metadata import distribution
 from pathlib import Path
 
+from endpilot.protocol import Protocol, RawPacket
 from nethernet_walk_probe import filled
 from server import ROOT, Server, configure
 
@@ -130,14 +131,47 @@ def main():
         filled(server, "fill -3 99 -3 3 99 3 stone")
         server.command("tp EndPilotTest 0.5 100 0.5")
 
+        proto = Protocol(2193)
+        flags = proto.binding.PlayerAuthInputPacket.InputData
+
+        def capture_after(before):
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                raw = [
+                    re.search(r"swing_input_payload=([0-9a-f]+)", line).group(1)
+                    for line in server.snapshot()
+                    if re.search(r"swing_input_payload=([0-9a-f]+)", line)
+                ]
+                if len(raw) > before:
+                    packet = proto.decode(RawPacket(
+                        proto.binding.PlayerAuthInputPacket.ID, bytes.fromhex(raw[before])
+                    ))
+                    return packet, len(raw)
+                if server.process.poll() is not None:
+                    raise RuntimeError("BDS stopped before post-swing input")
+                time.sleep(0.1)
+            raise TimeoutError("missing BDS post-swing PlayerAuthInput")
+
         before = sum("swing_animate_received=" in line for line in server.snapshot())
         send("swing")
         until("swing_submitted")
         server_has("swing_animate_received=")
         after = sum("swing_animate_received=" in line for line in server.snapshot())
-        assert after == before + 1, f"Expected one new server-received animation, got {before} -> {after}"
-        result["received_animations"] = after - before
-        result["checks"].append("bds_received_one_sdk_animate_packet")
+        assert after == before + 1, f"Expected one ordinary swing, got {before} -> {after}"
+        plain_input, count = capture_after(0)
+        assert flags.MISSED_SWING not in plain_input.input_data
+        result["checks"].append("bds_received_normal_swing_without_missed_flag")
+
+        send("missed")
+        until("missed_swing_tick=")
+        server_has("swing_input_payload=")
+        missed_input, _ = capture_after(count)
+        final = sum("swing_animate_received=" in line for line in server.snapshot())
+        assert final == after + 1, f"Expected one missed-swing animation, got {after} -> {final}"
+        assert flags.MISSED_SWING in missed_input.input_data, missed_input.input_data
+        result["received_animations"] = final - before
+        result["missed_swing_tick"] = int(missed_input.client_tick)
+        result["checks"].append("bds_received_missed_swing_auth_input")
 
         send("close")
         until("disconnected EndPilotTest")
