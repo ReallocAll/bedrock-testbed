@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
+    parser.add_argument("--store", action="store_true", help="craft then store the output in a chest")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -61,7 +62,8 @@ def main():
         url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
                else "raknet://127.0.0.1:19132")
         client = subprocess.Popen(
-            [sys.executable, str(args.probe.absolute()), url],
+            [sys.executable, str(args.probe.absolute()), url]
+            + (["--store"] if args.store else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -142,6 +144,35 @@ def main():
         start = server.command("testforblock 2 100 0 gold_block")
         server_has("successfully found", start)
         result["checks"].append("bds_independently_confirmed_crafted_output")
+
+        if args.store:
+            until("storage_chest_watch_ready")
+            server.command("setblock 1 100 0 chest")
+            start = server.command("testforblock 1 100 0 chest")
+            server_has("successfully found", start)
+            result["checks"].append("bds_chest_placed_after_client_watch")
+            stored = json.loads(until("storage_result="))
+            result["stored"] = stored
+            assert stored["result"] == "SUCCESS", stored
+            assert stored["request_id"] < 0 and stored["request_id"] % 2 == 1, stored
+            assert stored["request_id"] != crafted["request_id"], stored
+            assert stored["response_chest_id"] == chosen["output_id"], stored
+            assert stored["response_chest_count"] == chosen["output_count"], stored
+            assert stored["reopened_chest_id"] == chosen["output_id"], stored
+            assert stored["reopened_chest_count"] == chosen["output_count"], stored
+            assert stored["inventory_output_count"] == 0 and not stored["open_window"], stored
+            result["checks"].append("response_reconciled_crafted_output_storage")
+            result["checks"].append("fresh_bds_chest_content_after_reopen")
+
+            # The crafted stack must no longer be held by the player, as
+            # independently checked with BDS's hasitem selector.
+            server.command(
+                f"execute as @a[hasitem={{item={chosen['output']},quantity=1..}}] "
+                "run setblock 3 100 0 diamond_block"
+            )
+            start = server.command("testforblock 3 100 0 air")
+            server_has("successfully found", start)
+            result["checks"].append("bds_confirmed_no_remaining_crafted_output")
 
         send("close")
         until("disconnected EndPilotTest")
