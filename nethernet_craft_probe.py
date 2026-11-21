@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--store", action="store_true", help="craft then store the output in a chest")
     parser.add_argument("--grid", action="store_true", help="craft from the 2x2 grid, not auto-craft")
     parser.add_argument("--workbench", action="store_true", help="craft nine ingots on a 3x3 workbench")
+    parser.add_argument("--tool", action="store_true", help="craft a wooden pickaxe on a 3x3 workbench")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -117,23 +118,38 @@ def main():
         server.command("gamemode survival EndPilotTest")
 
         chosen = json.loads(until("recipe_selected="))
-        assert re.fullmatch(r"minecraft:[a-z0-9_]+", chosen["ingredient"]), chosen
+        if args.tool:
+            assert chosen["output"] == "minecraft:wooden_pickaxe", chosen
+            assert chosen["ingredients"] == [
+                {"name": "minecraft:oak_planks", "count": 3},
+                {"name": "minecraft:stick", "count": 2},
+            ], chosen
+        else:
+            assert re.fullmatch(r"minecraft:[a-z0-9_]+", chosen["ingredient"]), chosen
+            assert chosen["ingredient_count"] > 0, chosen
         assert re.fullmatch(r"minecraft:[a-z0-9_]+", chosen["output"]), chosen
-        assert chosen["ingredient_count"] > 0 and chosen["output_count"] > 0, chosen
+        assert chosen["output_count"] > 0, chosen
         result["recipe"] = chosen
         result["checks"].append("server_advertised_recipe_and_net_id")
-        if args.workbench:
+        if args.workbench or args.tool:
             server.command("setblock 1 100 0 crafting_table")
             start = server.command("testforblock 1 100 0 crafting_table")
             server_has("successfully found", start)
             result["checks"].append("bds_confirmed_workbench_block")
 
-        start = server.command(
-            f"give EndPilotTest {chosen['ingredient']} {chosen['ingredient_count']}"
-        )
-        server_has("gave", start)
+        if args.tool:
+            for ingredient in chosen["ingredients"]:
+                start = server.command(
+                    f"give EndPilotTest {ingredient['name']} {ingredient['count']}"
+                )
+                server_has("gave", start)
+        else:
+            start = server.command(
+                f"give EndPilotTest {chosen['ingredient']} {chosen['ingredient_count']}"
+            )
+            server_has("gave", start)
         send("craft")
-        if args.workbench:
+        if args.workbench or args.tool:
             window = json.loads(until("workbench_window="))
             assert window["type"] == "WORKBENCH", window
             assert window["position"] == [1, 100, 0], window
@@ -141,14 +157,16 @@ def main():
             result["checks"].append("server_opened_workbench_window")
 
             stages = json.loads(until("grid_stages="))
-            assert len(stages) == 9, stages
-            assert [s["grid_slot"] for s in stages] == list(range(32, 41)), stages
+            expected_slots = [32, 33, 34, 36, 39] if args.tool else list(range(32, 41))
+            assert len(stages) == len(expected_slots), stages
+            assert [s["grid_slot"] for s in stages] == expected_slots, stages
             assert all(s["result"] == "SUCCESS" for s in stages), stages
             ids = [s["request_id"] for s in stages]
-            assert len(set(ids)) == 9 and all(i < 0 and i % 2 == 1 for i in ids), stages
-            assert [s["source_after"] for s in stages] == list(range(8, -1, -1)), stages
+            assert len(set(ids)) == len(expected_slots) and all(i < 0 and i % 2 == 1 for i in ids), stages
+            expected_remaining = [2, 1, 0, 1, 0] if args.tool else list(range(8, -1, -1))
+            assert [s["source_after"] for s in stages] == expected_remaining, stages
             result["stages"] = stages
-            result["checks"].append("nine_workbench_slots_accepted_and_reconciled")
+            result["checks"].append("workbench_ingredients_accepted_and_reconciled")
         if args.grid:
             staged = json.loads(until("grid_stage="))
             result["stage"] = staged
@@ -161,13 +179,15 @@ def main():
         crafted = json.loads(until("craft_result="))
         if args.grid:
             assert crafted["request_id"] != staged["request_id"], (staged, crafted)
-        if args.workbench:
+        if args.workbench or args.tool:
             assert crafted["request_id"] not in ids, (stages, crafted)
         result["craft"] = crafted
         assert crafted["result"] == "SUCCESS", crafted
         assert crafted["request_id"] < 0 and crafted["request_id"] % 2 == 1, crafted
-        assert crafted["source_before"] >= chosen["ingredient_count"], crafted
-        assert crafted["source_after"] == crafted["source_before"] - chosen["ingredient_count"], crafted
+        expected_consumed = (sum(i["count"] for i in chosen["ingredients"]) if args.tool
+                             else chosen["ingredient_count"])
+        assert crafted["source_before"] >= expected_consumed, crafted
+        assert crafted["source_after"] == crafted["source_before"] - expected_consumed, crafted
         assert crafted["output_id"] == chosen["output_id"], crafted
         assert crafted["output_count"] == chosen["output_count"], crafted
         result["checks"].append("matching_item_stack_response_and_inventory_slots")
@@ -181,14 +201,16 @@ def main():
         start = server.command("testforblock 2 100 0 gold_block")
         server_has("successfully found", start)
         result["checks"].append("bds_independently_confirmed_crafted_output")
-        if args.workbench:
-            server.command(
-                "execute as @a[hasitem={item=iron_ingot,quantity=1..}] "
-                "run setblock 3 100 0 diamond_block"
-            )
-            start = server.command("testforblock 3 100 0 air")
-            server_has("successfully found", start)
-            result["checks"].append("bds_confirmed_nine_inputs_consumed")
+        if args.workbench or args.tool:
+            materials = (["oak_planks", "stick"] if args.tool else ["iron_ingot"])
+            for offset, material in enumerate(materials, start=3):
+                server.command(
+                    f"execute as @a[hasitem={{item={material},quantity=1..}}] "
+                    f"run setblock {offset} 100 0 diamond_block"
+                )
+                start = server.command(f"testforblock {offset} 100 0 air")
+                server_has("successfully found", start)
+            result["checks"].append("bds_confirmed_workbench_inputs_consumed")
 
         if args.store:
             until("storage_chest_watch_ready")
