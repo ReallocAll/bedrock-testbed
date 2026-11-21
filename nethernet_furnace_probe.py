@@ -1,4 +1,4 @@
-"""Confirm EndPilot furnace input/fuel/output against real isolated BDS on both transports."""
+"""Confirm EndPilot furnace input/fuel/output and optional chest storage on real BDS."""
 from __future__ import annotations
 
 import argparse
@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", type=Path, required=True)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
+    parser.add_argument("--store", action="store_true")
     args = parser.parse_args()
     work = ROOT / "work"
     if work.exists():
@@ -58,7 +59,8 @@ def main():
         url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
                else "raknet://127.0.0.1:19132")
         client = subprocess.Popen(
-            [sys.executable, str(args.probe.absolute()), url],
+            [sys.executable, str(args.probe.absolute()), url]
+            + (["--store"] if args.store else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -170,6 +172,33 @@ def main():
         closed = json.loads(until("furnace_closed="))
         assert closed == {"id": window["id"], "open_window": False}, closed
         result["checks"].append("matching_window_close")
+
+        if args.store:
+            until("furnace_storage_watch_ready")
+            server.command("setblock 1 100 0 chest")
+            start = server.command("testforblock 1 100 0 chest")
+            server_has("successfully found", start)
+            result["checks"].append("bds_replaced_furnace_with_chest")
+            stored = json.loads(until("furnace_storage="))
+            result["stored"] = stored
+            assert stored["request_id"] == -7 and stored["result"] == "SUCCESS", stored
+            assert stored["response_chest_id"] == output_item["item_id"], stored
+            assert stored["response_chest_count"] == 1, stored
+            assert stored["reopened_chest_id"] == output_item["item_id"], stored
+            assert stored["reopened_chest_count"] == 1, stored
+            assert stored["inventory_count"] == 0 and not stored["open_window"], stored
+            result["checks"].append("server_accepted_ingot_storage_and_reconciled_slots")
+            result["checks"].append("fresh_bds_chest_content_after_reopen")
+
+            # Independent player-inventory oracle: storage removed the ingot.
+            server.command(
+                "execute as @a[hasitem={item=iron_ingot,quantity=1..}] "
+                "run setblock 3 100 0 diamond_block"
+            )
+            start = server.command("testforblock 3 100 0 air")
+            server_has("successfully found", start)
+            result["checks"].append("bds_confirmed_no_remaining_player_ingot")
+
         send("disconnect")
         until("disconnected EndPilotTest")
         assert client.wait(timeout=10) == 0
