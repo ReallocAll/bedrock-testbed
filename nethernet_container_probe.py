@@ -82,7 +82,7 @@ def main():
             + (["--chat-during-take"] if args.chat_during_take else [])
             + (["--server-grant-during-take"] if args.server_grant_during_take else [])
             + (["--put-back-count", "1"] if args.put else [])
-            + (["--equip-armor-slot", "0"] if args.equip else [])
+            + (["--equip-armor-slot", "0", "--unequip-after-equip"] if args.equip else [])
             + (["--expect-server-close"] if args.server_close else [])
             + (["--drop-count", "1"] if args.drop else [])
             + (["--split-slot", "3"] if args.split else [])
@@ -406,12 +406,9 @@ def main():
             assert equipped["armor_count"] == 1 and equipped["inventory_count"] == 0, equipped
             result["armor_equip"] = equipped
             result["checks"].append("server_accepted_helmet_equip_and_slot_corrections")
-            closed_screen = json.loads(until("player_inventory_closed="))
-            assert closed_screen["id"] == screen["id"], (closed_screen, screen)
-            assert closed_screen["open_window"] is False, closed_screen
-            result["checks"].append("server_confirmed_player_inventory_close")
-
-            # Verify the actual armor slot independently from the packet response.
+            # Hold the public SDK before unequipping so BDS can inspect
+            # the armor state independently of the earlier stack response.
+            until("armor_unequip_ready")
             server.command(
                 "execute as @a[hasitem={item=iron_helmet,location=slot.armor.head}] "
                 "run setblock 2 100 0 gold_block"
@@ -419,6 +416,28 @@ def main():
             start = server.command("testforblock 2 100 0 gold_block")
             server_has("successfully found", start)
             result["checks"].append("bds_independently_confirmed_helmet_armor_slot")
+            send("unequip")
+            unequipped = json.loads(until("armor_unequip_response="))
+            assert unequipped["request_id"] < 0 and unequipped["request_id"] % 2 != 0, unequipped
+            assert unequipped["request_id"] != equipped["request_id"], unequipped
+            assert unequipped["result"] == "SUCCESS", unequipped
+            assert unequipped["inventory_item_id"] == item["item_id"], unequipped
+            assert unequipped["inventory_count"] == 1, unequipped
+            assert unequipped["armor_item_id"] == 0 and unequipped["armor_count"] == 0, unequipped
+            result["armor_unequip"] = unequipped
+            result["checks"].append("server_accepted_helmet_unequip_and_slot_corrections")
+            closed_screen = json.loads(until("player_inventory_closed="))
+            assert closed_screen["id"] == screen["id"], (closed_screen, screen)
+            assert closed_screen["open_window"] is False, closed_screen
+            result["checks"].append("server_confirmed_player_inventory_close")
+
+            server.command(
+                "execute as @a[hasitem={item=iron_helmet,location=slot.hotbar,slot=2}] "
+                "run setblock 3 100 0 diamond_block"
+            )
+            start = server.command("testforblock 3 100 0 diamond_block")
+            server_has("successfully found", start)
+            result["checks"].append("bds_independently_confirmed_helmet_returned_to_hotbar")
 
         send("disconnect")
         until("disconnected EndPilotTest")
