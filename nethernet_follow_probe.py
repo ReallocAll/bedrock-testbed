@@ -140,7 +140,7 @@ def main():
             until("follow_kick_watcher_ready")
             send("kick")
             server.command("kick EndPilotTest EndPilotKickFollow")
-            payload = json.loads(until("follow_kicked=", timeout=15).partition("follow_kicked=")[2])
+            payload = json.loads(until("follow_kicked=", timeout=15))
             outcome["kick"] = payload
             if payload["packet"] != "DisconnectPacket" or payload["action_error"] != "ConnectionError":
                 raise AssertionError(f"Follow did not propagate the typed server kick: {payload}")
