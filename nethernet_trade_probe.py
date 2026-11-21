@@ -140,6 +140,31 @@ def main():
         ), offers
         result["trade"] = offers
         result["checks"].append("server_trade_quote_with_item_pricing")
+
+        selected = next(
+            quote for quote in offers["offers"]
+            if quote["buy_a"] is not None and quote["buy_b"] is None
+            and quote["uses"] is not None and quote["max_uses"] is not None
+            and quote["uses"] < quote["max_uses"]
+        )
+        material = selected["buy_a"]
+        assert re.fullmatch(r"minecraft:[a-z0-9_]+", material["name"]), material
+        count = int(material["count"])
+        assert 1 <= count <= 64, material
+        server.command(f"give EndPilotTest {material['name']} {count}")
+        send("stage")
+        staged = json.loads(until("trade_ingredient_result=", timeout=30))
+        result["staged"] = staged
+        assert staged["result"] == "SUCCESS", staged
+        assert staged["before"] >= count, staged
+        assert staged["after"] == staged["before"] - count, staged
+        assert staged["amount"] == count, staged
+        assert any(
+            c["name"] in ("TRADE_INGREDIENT_1_CONTAINER", "TRADE2_INGREDIENT_1_CONTAINER")
+            and any(slot["amount"] == count for slot in c["slots"])
+            for c in staged["input_containers"]
+        ), staged
+        result["checks"].append("server_accepted_trade_ingredient_and_reconciled_slots")
         closed = int(until("trade_window_closed=", timeout=15))
         assert closed == offers["window_id"], (closed, offers)
         result["checks"].append("trade_close_ack_matches_window")
