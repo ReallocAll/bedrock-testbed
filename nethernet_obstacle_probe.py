@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import re
 import shutil
 import sys
@@ -17,9 +18,67 @@ from nethernet_walk_probe import filled
 from server import ROOT, Server, configure
 
 
+async def exercise_cancel_walk(bot: Bot, server: Server, results: dict, origin: dict):
+    """Cancel a live public walk, then reuse the still-connected player."""
+    movement = bot._movement
+    ticker = movement._ticker
+    walk = asyncio.create_task(bot.walk_forward(160))
+    await asyncio.sleep(0.65)
+    if walk.done():
+        await walk
+        raise AssertionError("Walk completed before active cancellation")
+    moving = await asyncio.to_thread(server_target, server)
+    if moving["position"]["z"] <= origin["position"]["z"] + 0.4:
+        raise AssertionError(f"BDS did not observe active walk: {origin} -> {moving}")
+
+    walk.cancel()
+    try:
+        await asyncio.wait_for(walk, 5)
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("Public walk did not propagate CancelledError")
+    if movement._active_done is not None:
+        raise AssertionError("Cancelled walk retained an active movement action")
+    if ticker.done():
+        raise AssertionError("Cancelled walk stopped the idle input ticker")
+
+    await asyncio.sleep(0.4)
+    settled = await asyncio.to_thread(server_target, server)
+    await asyncio.sleep(0.4)
+    rested = await asyncio.to_thread(server_target, server)
+    drift = math.hypot(
+        rested["position"]["x"] - settled["position"]["x"],
+        rested["position"]["z"] - settled["position"]["z"],
+    )
+    if drift > 0.2:
+        raise AssertionError(f"BDS continued walking after cancel: {settled} -> {rested}")
+
+    x, y, z = bot.position
+    await bot.look_at((x - 6, y, z))
+    resumed = await bot.walk_forward(8)
+    await asyncio.sleep(0.3)
+    after = await asyncio.to_thread(server_target, server)
+    if resumed != 8 or after["position"]["x"] >= rested["position"]["x"] - 0.2:
+        raise AssertionError(f"BDS did not accept the next walk: {rested} -> {after}")
+    if movement._active_done is not None:
+        raise AssertionError("Follow-up walk retained an active movement action")
+    results["cancel_walk"] = {
+        "action": "walk_forward", "outcome": "CancelledError",
+        "active": moving, "settled": settled, "rested": rested,
+        "stop_drift": drift, "followup_frames": resumed,
+        "followup_server_position": after,
+    }
+    results["checks"].extend((
+        "bds_querytarget_confirms_active_walk",
+        "cancelled_walk_releases_input_and_ticker_survives",
+        "bds_querytarget_confirms_stop_and_same_bot_reuse",
+    ))
+
+
 async def exercise(server: Server, transport: str, results: dict,
                    kick_active: bool = False, close_active: bool = False,
-                   cancel_active: bool = False):
+                   cancel_active: bool = False, cancel_walk: bool = False):
     bot = Bot("EndPilotTest")
     url = ("http://127.0.0.1:19132" if transport == "nethernet"
            else "raknet://127.0.0.1:19132")
@@ -63,7 +122,9 @@ async def exercise(server: Server, transport: str, results: dict,
         results["observed_blocks"] = dict(zip((str(p) for p in sampled), states))
         results["checks"].append("client_observed_air_solid_and_unknown")
 
-        if kick_active or close_active or cancel_active:
+        if cancel_walk:
+            await exercise_cancel_walk(bot, server, results, origin)
+        elif kick_active or close_active or cancel_active:
             # A longer goal keeps navigation active while BDS observes a detour.
             movement = bot._movement
             ticker = movement._ticker
@@ -183,9 +244,10 @@ def main():
     parser.add_argument("--kick-active", action="store_true")
     parser.add_argument("--close-active", action="store_true")
     parser.add_argument("--cancel-active", action="store_true")
+    parser.add_argument("--cancel-walk", action="store_true")
     args = parser.parse_args()
-    if sum((args.kick_active, args.close_active, args.cancel_active)) > 1:
-        parser.error("--kick-active, --close-active and --cancel-active are mutually exclusive")
+    if sum((args.kick_active, args.close_active, args.cancel_active, args.cancel_walk)) > 1:
+        parser.error("active shutdown/cancellation modes are mutually exclusive")
     work = ROOT / "work"
     if work.exists():
         shutil.rmtree(work)
@@ -219,7 +281,7 @@ def main():
         results["checks"].append("fresh_bds_ready")
         asyncio.run(exercise(server, args.transport, results,
                              kick_active=args.kick_active, close_active=args.close_active,
-                             cancel_active=args.cancel_active))
+                             cancel_active=args.cancel_active, cancel_walk=args.cancel_walk))
         server.stop()
         server = None
         results["checks"].append("bds_clean_shutdown")
