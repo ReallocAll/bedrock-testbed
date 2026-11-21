@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
+    parser.add_argument("--forward", action="store_true", help="Exercise a forward-moving jump")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -110,22 +111,38 @@ def main():
         result["checks"].append("stable_server_ground_before_jump")
 
         send("jump")
-        tick = int(until("jump_tick="))
-        assert tick > 0
-        result["jump_tick"] = tick
-        heights = []
+        if args.forward:
+            until("jump_forward_started")
+        else:
+            tick = int(until("jump_tick="))
+            assert tick > 0
+            result["jump_tick"] = tick
+        samples = []
         deadline = time.monotonic() + 1.1
         while time.monotonic() < deadline:
-            heights.append(server_position(server)["y"])
+            samples.append(server_position(server))
             time.sleep(0.04)
+        if args.forward:
+            ticks = int(until("jump_forward_ticks="))
+            assert ticks == 18, ticks
+            result["jump_forward_ticks"] = ticks
         until("jump_finished")
-        rise = max(heights, default=stable["y"]) - stable["y"]
+        rise = max((p["y"] for p in samples), default=stable["y"]) - stable["y"]
         landed = server_position(server)
-        result["jump"] = {"ground": stable, "heights": heights, "rise": rise, "landed": landed}
+        result["jump"] = {
+            "ground": stable, "sampled_positions": samples,
+            "rise": rise, "landed": landed,
+        }
         assert rise > 0.25, result["jump"]
         result["checks"].append("independent_bds_querytarget_jump_rise")
         assert abs(landed["y"] - stable["y"]) < 0.2, result["jump"]
         result["checks"].append("independent_bds_querytarget_landing")
+        if args.forward:
+            displacement_z = landed["z"] - stable["z"]
+            assert displacement_z > 0.5, result["jump"]
+            assert abs(landed["x"] - stable["x"]) < 0.35, result["jump"]
+            result["jump"]["displacement_z"] = displacement_z
+            result["checks"].append("independent_bds_forward_jump_displacement")
 
         send("close")
         until("disconnected EndPilotTest")
