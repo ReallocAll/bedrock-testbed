@@ -179,14 +179,14 @@ def main():
 
         if args.server_close:
             until("server_close_watch_ready")
-            start = server.command("setblock 1 100 0 air")
-            server_has("successfully", start)
+            server.command("setblock 1 100 0 air")
+            start = server.command("testforblock 1 100 0 air")
+            server_has("successfully found", start)
             closed = json.loads(until("server_container_closed="))
             assert closed == {
                 "id": opened["id"], "server_initiated": True, "open_window": False,
             }, closed
             result["checks"].append("bds_server_initiated_chest_close_and_client_state")
-            result["checks"].append("client_close_ack_packet_checked_by_sdk_regression")
         else:
             send("close_window")
             closed = json.loads(until("container_closed="))
