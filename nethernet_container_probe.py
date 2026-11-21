@@ -82,7 +82,8 @@ def main():
             + (["--chat-during-take"] if args.chat_during_take else [])
             + (["--server-grant-during-take"] if args.server_grant_during_take else [])
             + (["--put-back-count", "1"] if args.put else [])
-            + (["--equip-armor-slot", "0", "--unequip-after-equip"] if args.equip else [])
+            + (["--equip-armor-slot", "0", "--unequip-after-equip",
+                "--swap-armor-after-unequip"] if args.equip else [])
             + (["--expect-server-close"] if args.server_close else [])
             + (["--drop-count", "1"] if args.drop else [])
             + (["--split-slot", "3"] if args.split else [])
@@ -426,11 +427,6 @@ def main():
             assert unequipped["armor_item_id"] == 0 and unequipped["armor_count"] == 0, unequipped
             result["armor_unequip"] = unequipped
             result["checks"].append("server_accepted_helmet_unequip_and_slot_corrections")
-            closed_screen = json.loads(until("player_inventory_closed="))
-            assert closed_screen["id"] == screen["id"], (closed_screen, screen)
-            assert closed_screen["open_window"] is False, closed_screen
-            result["checks"].append("server_confirmed_player_inventory_close")
-
             server.command(
                 "execute as @a[hasitem={item=iron_helmet,location=slot.hotbar,slot=2}] "
                 "run setblock 3 100 0 diamond_block"
@@ -438,6 +434,52 @@ def main():
             start = server.command("testforblock 3 100 0 diamond_block")
             server_has("successfully found", start)
             result["checks"].append("bds_independently_confirmed_helmet_returned_to_hotbar")
+
+            until("armor_reequip_ready")
+            send("armor_reequip")
+            reequip = json.loads(until("armor_reequip_response="))
+            assert reequip["request_id"] == -7 and reequip["result"] == "SUCCESS", reequip
+            assert reequip["armor_item_id"] == item["item_id"], reequip
+            result["checks"].append("server_accepted_helmet_reequip")
+            until("armor_swap_ready")
+            server.command(
+                "execute as @a[hasitem={item=iron_helmet,location=slot.armor.head}] "
+                "run setblock 2 100 1 gold_block"
+            )
+            start = server.command("testforblock 2 100 1 gold_block")
+            server_has("successfully found", start)
+            result["checks"].append("bds_independently_confirmed_reequipped_helmet")
+            start = server.command(
+                "replaceitem entity EndPilotTest slot.hotbar 2 golden_helmet 1"
+            )
+            server_has("replaced", start)
+            send("armor_swap_grant_done")
+            swap = json.loads(until("armor_swap_response="))
+            assert swap["request_id"] == -9 and swap["result"] == "SUCCESS", swap
+            assert swap["destination_before_id"] > 0, swap
+            assert swap["destination_before_id"] != item["item_id"], swap
+            assert swap["inventory_item_id"] == item["item_id"], swap
+            assert swap["inventory_count"] == 1, swap
+            assert swap["armor_item_id"] == swap["destination_before_id"], swap
+            assert swap["armor_count"] == 1, swap
+            result["armor_swap"] = swap
+            result["checks"].append("server_accepted_occupied_armor_slot_swap")
+
+            for location, helmet, block in (
+                ("slot.armor.head", "golden_helmet", "emerald_block"),
+                ("slot.hotbar,slot=2", "iron_helmet", "diamond_block"),
+            ):
+                server.command(
+                    f"execute as @a[hasitem={{item={helmet},location={location}}}] "
+                    f"run setblock 3 100 1 {block}"
+                )
+                start = server.command(f"testforblock 3 100 1 {block}")
+                server_has("successfully found", start)
+            result["checks"].append("bds_independently_confirmed_both_swapped_armor_slots")
+            closed_screen = json.loads(until("player_inventory_closed="))
+            assert closed_screen["id"] == screen["id"], (closed_screen, screen)
+            assert closed_screen["open_window"] is False, closed_screen
+            result["checks"].append("server_confirmed_player_inventory_close")
 
         send("disconnect")
         until("disconnected EndPilotTest")
