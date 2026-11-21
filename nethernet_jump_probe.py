@@ -29,9 +29,12 @@ def main():
     direction = parser.add_mutually_exclusive_group()
     direction.add_argument("--forward", action="store_true", help="Exercise a forward-moving jump")
     direction.add_argument("--backward", action="store_true", help="Exercise a backward-moving jump")
+    direction.add_argument("--left", action="store_true", help="Exercise a left-strafing jump")
+    direction.add_argument("--right", action="store_true", help="Exercise a right-strafing jump")
     args = parser.parse_args()
-    moving_jump = args.forward or args.backward
-    direction = "backward" if args.backward else "forward"
+    moving_jump = args.forward or args.backward or args.left or args.right
+    direction = ("backward" if args.backward else "left" if args.left
+                 else "right" if args.right else "forward")
 
     work = ROOT / "work"
     if work.exists():
@@ -65,8 +68,11 @@ def main():
 
         url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
                else "raknet://127.0.0.1:19132")
+        client_command = [sys.executable, str(args.probe.absolute()), url]
+        if args.left or args.right:
+            client_command.append(direction)
         client = subprocess.Popen(
-            [sys.executable, str(args.probe.absolute()), url],
+            client_command,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -142,10 +148,16 @@ def main():
         assert abs(landed["y"] - stable["y"]) < 0.2, result["jump"]
         result["checks"].append("independent_bds_querytarget_landing")
         if moving_jump:
-            displacement_z = landed["z"] - stable["z"]
-            assert displacement_z < -0.5 if args.backward else displacement_z > 0.5, result["jump"]
-            assert abs(landed["x"] - stable["x"]) < 0.35, result["jump"]
-            result["jump"]["displacement_z"] = displacement_z
+            if args.left or args.right:
+                displacement_x = landed["x"] - stable["x"]
+                assert (displacement_x > 0.5 if args.left else displacement_x < -0.5), result["jump"]
+                assert abs(landed["z"] - stable["z"]) < 0.35, result["jump"]
+                result["jump"]["displacement_x"] = displacement_x
+            else:
+                displacement_z = landed["z"] - stable["z"]
+                assert (displacement_z < -0.5 if args.backward else displacement_z > 0.5), result["jump"]
+                assert abs(landed["x"] - stable["x"]) < 0.35, result["jump"]
+                result["jump"]["displacement_z"] = displacement_z
             result["checks"].append(f"independent_bds_{direction}_jump_displacement")
 
         send("close")
