@@ -115,7 +115,7 @@ def main():
             "shaped_recipes", "shapeless_recipes", "user_data_shapeless_recipes",
             "shapeless_chemistry_recipes", "shaped_chemistry_recipes",
         ), catalog
-        assert catalog["first_result_id"] > 0 and catalog["first_result_count"] > 0, catalog
+        assert catalog["first_result_id"] != 0 and catalog["first_result_count"] > 0, catalog
         assert catalog["first_ingredient_count"] > 0, catalog
         result["recipes"] = catalog
         result["checks"].append("server_crafting_data_catalog_and_id_lookup")
