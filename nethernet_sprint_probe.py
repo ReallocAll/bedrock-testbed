@@ -1,4 +1,4 @@
-"""Compare public SDK sprint and walk at equal frame counts against real BDS."""
+"""Compare public SDK forward, backward and sprinting input against real BDS."""
 
 from __future__ import annotations
 
@@ -98,8 +98,8 @@ def main():
         # Prepare a loaded, level platform before observing vertical motion.
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
-        filled(server, "fill -3 100 -3 3 104 10 air")
-        filled(server, "fill -3 99 -3 3 99 10 stone")
+        filled(server, "fill -3 100 -10 3 104 10 air")
+        filled(server, "fill -3 99 -10 3 99 10 stone")
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
 
@@ -122,6 +122,23 @@ def main():
 
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
+        backward_start = server_position(server)
+        assert abs(backward_start["z"] - stable["z"]) < 0.2, (stable, backward_start)
+        send("backward")
+        backward_ticks = int(until("backward_ticks="))
+        assert backward_ticks == 18
+        time.sleep(0.3)
+        backward_end = server_position(server)
+        assert abs(backward_end["y"] - backward_start["y"]) < 0.2, (
+            backward_start, backward_end)
+        assert backward_end["z"] < backward_start["z"] - 0.5, (
+            backward_start, backward_end)
+        assert abs(backward_end["x"] - backward_start["x"]) < 0.35, (
+            backward_start, backward_end)
+        result["checks"].append("independent_bds_backward_displacement")
+
+        server.command("tp EndPilotTest 0.5 100 0.5")
+        time.sleep(0.7)
         sprint_start = server_position(server)
         assert abs(sprint_start["z"] - stable["z"]) < 0.2, (stable, sprint_start)
         send("sprint")
@@ -135,7 +152,10 @@ def main():
         result["checks"].append("sprint_remains_grounded")
         sprint_distance = sprinted["z"] - sprint_start["z"]
         result["movement"] = {
-            "walk_ticks": walk_ticks, "sprint_ticks": sprint_ticks,
+            "walk_ticks": walk_ticks, "backward_ticks": backward_ticks,
+            "backward_start": backward_start, "backward_end": backward_end,
+            "backward_displacement_z": backward_end["z"] - backward_start["z"],
+            "sprint_ticks": sprint_ticks,
             "key_tick": key_tick, "release_tick": release_tick,
             "walk_start": stable, "walk_end": walked, "sprint_start": sprint_start,
             "sprint_end": sprinted, "walk_distance": walk_distance,
