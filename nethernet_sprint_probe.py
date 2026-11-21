@@ -1,4 +1,4 @@
-"""Compare public SDK forward, backward and sprinting input against real BDS."""
+"""Compare public SDK forward, backward, lateral and sprinting input against real BDS."""
 
 from __future__ import annotations
 
@@ -98,8 +98,8 @@ def main():
         # Prepare a loaded, level platform before observing vertical motion.
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
-        filled(server, "fill -3 100 -10 3 104 10 air")
-        filled(server, "fill -3 99 -10 3 99 10 stone")
+        filled(server, "fill -8 100 -10 8 104 10 air")
+        filled(server, "fill -8 99 -10 8 99 10 stone")
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
 
@@ -139,6 +139,32 @@ def main():
 
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
+        left_start = server_position(server)
+        send("left")
+        left_ticks = int(until("left_ticks="))
+        assert left_ticks == 18
+        time.sleep(0.3)
+        left_end = server_position(server)
+        assert left_end["x"] > left_start["x"] + 0.5, (left_start, left_end)
+        assert abs(left_end["z"] - left_start["z"]) < 0.35, (left_start, left_end)
+        assert abs(left_end["y"] - left_start["y"]) < 0.2, (left_start, left_end)
+        result["checks"].append("independent_bds_left_strafe")
+
+        server.command("tp EndPilotTest 0.5 100 0.5")
+        time.sleep(0.7)
+        right_start = server_position(server)
+        send("right")
+        right_ticks = int(until("right_ticks="))
+        assert right_ticks == 18
+        time.sleep(0.3)
+        right_end = server_position(server)
+        assert right_end["x"] < right_start["x"] - 0.5, (right_start, right_end)
+        assert abs(right_end["z"] - right_start["z"]) < 0.35, (right_start, right_end)
+        assert abs(right_end["y"] - right_start["y"]) < 0.2, (right_start, right_end)
+        result["checks"].append("independent_bds_right_strafe")
+
+        server.command("tp EndPilotTest 0.5 100 0.5")
+        time.sleep(0.7)
         sprint_start = server_position(server)
         assert abs(sprint_start["z"] - stable["z"]) < 0.2, (stable, sprint_start)
         send("sprint")
@@ -153,6 +179,9 @@ def main():
         sprint_distance = sprinted["z"] - sprint_start["z"]
         result["movement"] = {
             "walk_ticks": walk_ticks, "backward_ticks": backward_ticks,
+            "left_ticks": left_ticks, "right_ticks": right_ticks,
+            "left_start": left_start, "left_end": left_end,
+            "right_start": right_start, "right_end": right_end,
             "backward_start": backward_start, "backward_end": backward_end,
             "backward_displacement_z": backward_end["z"] - backward_start["z"],
             "sprint_ticks": sprint_ticks,
