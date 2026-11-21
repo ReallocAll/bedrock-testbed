@@ -475,6 +475,7 @@ jobs:
           name: real-bds-endpilot-network-settings-${{ matrix.transport }}-${{ matrix.entity_scene }}
           path: |
             work/result.json
+            work/villager_trade_result.json
             work/bds.log
             work/server/version.txt
             work/server/server.properties
