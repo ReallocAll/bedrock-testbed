@@ -301,6 +301,63 @@ def main():
                     wait_server("successfully found", start)
                     result["bds_ingredient_available"] = expected_block == "gold_block"
                     result["checks"].append("independent_bds_reconnect_inventory_oracle")
+                    # Rejoin is not an automatic retry. The client waits for a
+                    # newly observed actor and newly quoted offer; BDS controls
+                    # when the replacement trader and ingredient become available.
+                    until("trade_retry_watch_ready", timeout=25)
+                    server.command("kill @e[type=villager]")
+                    start = server.command(
+                        "summon villager 2 100 0 0 0 minecraft:become_farmer"
+                    )
+                    retry_spawn = json.loads(until("trade_retry_spawn=", timeout=25))
+                    assert retry_spawn["entity_id"] != spawned["entity_id"], retry_spawn
+                    assert retry_spawn["actor_type"] in (
+                        "minecraft:villager", "minecraft:villager_v2"
+                    ), retry_spawn
+                    wait_server("successfully summoned", start)
+                    result["retry_spawn"] = retry_spawn
+                    result["checks"].append("reconnected_player_observed_new_villager")
+                    send("interact")
+                    retry_quote = json.loads(until("trade_retry_offer=", timeout=25))
+                    assert retry_quote["trader_unique_id"] == retry_spawn["entity_id"], retry_quote
+                    offer = retry_quote["offer"]
+                    assert offer["buy_a"] is not None and offer["buy_b"] is None, offer
+                    assert offer["sell"] is not None and offer["recipe_net_id"] is not None, offer
+                    assert offer["uses"] < offer["max_uses"], offer
+                    assert re.fullmatch(r"minecraft:[a-z0-9_]+", offer["buy_a"]["name"]), offer
+                    assert re.fullmatch(r"minecraft:[a-z0-9_]+", offer["sell"]["name"]), offer
+                    amount = int(offer["buy_a"]["count"])
+                    assert 1 <= amount <= 64, offer
+                    result["retry_quote"] = retry_quote
+                    server.command(f"give EndPilotTest {offer['buy_a']['name']} {amount}")
+                    send("stage")
+                    retried = json.loads(until("trade_reconnect_retry_result=", timeout=35))
+                    assert retried["trader_unique_id"] == retry_spawn["entity_id"], retried
+                    assert retried["window_id"] == retry_quote["window_id"], retried
+                    assert retried["closed_window"] == retry_quote["window_id"], retried
+                    assert retried["ingredient_name"] == offer["buy_a"]["name"], retried
+                    assert retried["ingredient_count"] == amount, retried
+                    assert retried["ingredient_after"] == retried["ingredient_before"] - amount, retried
+                    assert retried["stage_result"] == retried["result"] == "SUCCESS", retried
+                    assert retried["stage_request_id"] < 0, retried
+                    assert retried["request_id"] < retried["stage_request_id"], retried
+                    assert retried["output_name"] == offer["sell"]["name"], retried
+                    assert retried["output_slot"] == 9 and retried["output_id"] != 0, retried
+                    assert retried["output_count"] == offer["sell"]["count"], retried
+                    result["retry"] = retried
+                    result["checks"].append("fresh_server_quote_staged_and_exchanged_after_reconnect")
+
+                    # An ItemStackResponse cannot independently prove the BDS
+                    # inventory effect. Query the live player's actual inventory.
+                    server.command("setblock 5 100 0 air")
+                    sell = offer["sell"]
+                    server.command(
+                        f"execute as @a[hasitem={{item={sell['name']},quantity={sell['count']}..}}] "
+                        "run setblock 5 100 0 gold_block"
+                    )
+                    start = server.command("testforblock 5 100 0 gold_block")
+                    wait_server("successfully found", start)
+                    result["checks"].append("independent_bds_post_reconnect_trade_output_oracle")
             elif args.interrupt:
                 until("trade_abort_ready")
                 send("abort")
