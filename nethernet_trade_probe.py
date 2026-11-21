@@ -317,6 +317,9 @@ def main():
                     wait_server("successfully summoned", start)
                     result["retry_spawn"] = retry_spawn
                     result["checks"].append("reconnected_player_observed_new_villager")
+                    # Reconnect does not imply a MovePlayer correction. As in
+                    # the initial world setup, BDS sends one after teleport.
+                    server.command("tp EndPilotTest 0.5 100 1.5")
                     send("interact")
                     retry_quote = json.loads(until("trade_retry_offer=", timeout=25))
                     assert retry_quote["trader_unique_id"] == retry_spawn["entity_id"], retry_quote
