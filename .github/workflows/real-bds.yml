@@ -544,7 +544,7 @@ jobs:
             --transport "${{ matrix.transport }}" \
             --hops-backward
       - name: Verify both repeated lateral hops against independent BDS coordinates
-        if: (inputs.health_probe == 'hop-lateral' || inputs.health_probe == 'hop-forward-diagonal')
+        if: inputs.health_probe == 'hop-lateral'
         shell: bash
         run: |
           .venv-client/bin/python nethernet_jump_probe.py \
