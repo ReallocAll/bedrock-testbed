@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--take", action="store_true", help="take half the chest stack")
     parser.add_argument("--put", action="store_true", help="take two and place one back")
     parser.add_argument("--equip", action="store_true", help="take a helmet and equip it after closing")
+    parser.add_argument("--server-close", action="store_true", help="BDS breaks the open chest")
     args = parser.parse_args()
     work = ROOT / "work"
     if work.exists():
@@ -67,7 +68,8 @@ def main():
             + (["--take-count", "1" if args.equip else "2", "--destination-slot", "2"]
                if (args.take or args.put or args.equip) else [])
             + (["--put-back-count", "1"] if args.put else [])
-            + (["--equip-armor-slot", "0"] if args.equip else []),
+            + (["--equip-armor-slot", "0"] if args.equip else [])
+            + (["--expect-server-close"] if args.server_close else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -175,11 +177,22 @@ def main():
             result["return_transfer"] = returned
             result["checks"].append("server_accepted_inventory_to_chest_place")
 
-        send("close_window")
-        closed = json.loads(until("container_closed="))
-        assert closed["id"] == opened["id"], (closed, opened)
-        assert closed["open_window"] is False, closed
-        result["checks"].append("server_confirmed_chest_window_close")
+        if args.server_close:
+            until("server_close_watch_ready")
+            start = server.command("setblock 1 100 0 air")
+            server_has("successfully", start)
+            closed = json.loads(until("server_container_closed="))
+            assert closed == {
+                "id": opened["id"], "server_initiated": True, "open_window": False,
+            }, closed
+            result["checks"].append("bds_server_initiated_chest_close_and_client_state")
+            result["checks"].append("client_close_ack_packet_checked_by_sdk_regression")
+        else:
+            send("close_window")
+            closed = json.loads(until("container_closed="))
+            assert closed["id"] == opened["id"], (closed, opened)
+            assert closed["open_window"] is False, closed
+            result["checks"].append("server_confirmed_chest_window_close")
         server.wait_player(True)
 
         if args.equip:
