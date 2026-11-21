@@ -152,7 +152,6 @@ def main():
             assert observed["count"] == 1, observed
             result["offhand"] = observed
             result["checks"].append("client_observed_bds_offhand_item")
-            until("offhand_check_ready")
             server.command(
                 "execute as @a[hasitem={item=shield,location=slot.weapon.offhand}] "
                 "run setblock 2 100 0 gold_block"
