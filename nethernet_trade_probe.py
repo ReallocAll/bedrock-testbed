@@ -26,7 +26,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
-    parser.add_argument("--interrupt", action="store_true", help="remove the trader before exchange")
+    parser.add_argument("--interrupt", action="store_true", help="cancel a staged trade through the public SDK")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -180,20 +180,19 @@ def main():
         result["checks"].append("server_accepted_trade_ingredient_and_reconciled_slots")
 
         if args.interrupt:
-            until("trade_interrupt_watch_ready")
-            # Removing the observed trader forces BDS to terminate the trade UI.
-            server.command("kill @e[type=villager_v2]")
-            interrupted = json.loads(until("trade_interrupted=", timeout=30))
-            assert interrupted["window_id"] == offers["window_id"], interrupted
-            assert interrupted["server_initiated"] is True, interrupted
-            assert interrupted["open_window"] is False, interrupted
-            assert interrupted["stale_exchange_blocked"] is True, interrupted
-            assert interrupted["expected_count"] == staged["before"], interrupted
-            assert interrupted["restored_count"] >= staged["before"], interrupted
-            result["interrupted"] = interrupted
-            result["checks"].append("server_close_and_sdk_recovery_state")
+            until("trade_abort_ready")
+            send("abort")
+            aborted = json.loads(until("trade_aborted=", timeout=30))
+            assert aborted["window_id"] == offers["window_id"], aborted
+            assert aborted["close_acknowledged"] is True, aborted
+            assert aborted["open_window"] is False, aborted
+            assert aborted["stale_exchange_blocked"] is True, aborted
+            assert aborted["expected_count"] == staged["before"], aborted
+            assert aborted["restored_count"] >= staged["before"], aborted
+            result["aborted"] = aborted
+            result["checks"].append("trade_cancel_ack_and_sdk_returned_ingredient")
 
-            # Check the returned ingredient independently in BDS, not just SDK state.
+            # Confirm the returned ingredient from BDS, independently of SDK state.
             server.command(
                 f"execute as @a[hasitem={{item={material['name']},quantity={count}..}}] "
                 "run setblock 6 100 0 gold_block"
