@@ -18,6 +18,38 @@ from nethernet_walk_probe import filled
 from server import ROOT, Server, configure
 
 
+async def exercise_close_walk(bot: Bot, server: Server, results: dict, origin: dict):
+    """Close the public Bot while a real BDS walk is still running."""
+    movement = bot._movement
+    ticker = movement._ticker
+    walk = asyncio.create_task(bot.walk_forward(160))
+    await asyncio.sleep(0.65)
+    if walk.done():
+        await walk
+        raise AssertionError("Walk completed before Bot.close()")
+    moving = await asyncio.to_thread(server_target, server)
+    if moving["position"]["z"] <= origin["position"]["z"] + 0.4:
+        raise AssertionError(f"BDS did not observe active walk: {origin} -> {moving}")
+
+    await asyncio.wait_for(bot.close(), 5)
+    frames = await asyncio.wait_for(walk, 5)
+    if not 5 <= frames < 160:
+        raise AssertionError(f"Bot.close() did not interrupt active walk: {frames}")
+    if movement._active_done is not None:
+        raise AssertionError("Closed walk retained an active movement action")
+    if not ticker.done():
+        raise AssertionError("Idle ticker survived Bot.close()")
+    if bot._movement is not None or bot._session is not None:
+        raise AssertionError("Bot retained movement or session after close")
+    results["close_walk"] = {
+        "submitted_frames": frames, "server_active_position": moving,
+    }
+    results["checks"].extend((
+        "bds_querytarget_confirms_active_walk",
+        "bot_close_interrupts_walk_and_drains_action_and_ticker",
+    ))
+
+
 async def exercise_cancel_walk(bot: Bot, server: Server, results: dict, origin: dict):
     """Cancel a live public walk, then reuse the still-connected player."""
     movement = bot._movement
@@ -78,7 +110,8 @@ async def exercise_cancel_walk(bot: Bot, server: Server, results: dict, origin: 
 
 async def exercise(server: Server, transport: str, results: dict,
                    kick_active: bool = False, close_active: bool = False,
-                   cancel_active: bool = False, cancel_walk: bool = False):
+                   cancel_active: bool = False, cancel_walk: bool = False,
+                   close_walk: bool = False):
     bot = Bot("EndPilotTest")
     url = ("http://127.0.0.1:19132" if transport == "nethernet"
            else "raknet://127.0.0.1:19132")
@@ -122,7 +155,9 @@ async def exercise(server: Server, transport: str, results: dict,
         results["observed_blocks"] = dict(zip((str(p) for p in sampled), states))
         results["checks"].append("client_observed_air_solid_and_unknown")
 
-        if cancel_walk:
+        if close_walk:
+            await exercise_close_walk(bot, server, results, origin)
+        elif cancel_walk:
             await exercise_cancel_walk(bot, server, results, origin)
         elif kick_active or close_active or cancel_active:
             # A longer goal keeps navigation active while BDS observes a detour.
@@ -245,8 +280,10 @@ def main():
     parser.add_argument("--close-active", action="store_true")
     parser.add_argument("--cancel-active", action="store_true")
     parser.add_argument("--cancel-walk", action="store_true")
+    parser.add_argument("--close-walk", action="store_true")
     args = parser.parse_args()
-    if sum((args.kick_active, args.close_active, args.cancel_active, args.cancel_walk)) > 1:
+    if sum((args.kick_active, args.close_active, args.cancel_active,
+            args.cancel_walk, args.close_walk)) > 1:
         parser.error("active shutdown/cancellation modes are mutually exclusive")
     work = ROOT / "work"
     if work.exists():
@@ -281,7 +318,8 @@ def main():
         results["checks"].append("fresh_bds_ready")
         asyncio.run(exercise(server, args.transport, results,
                              kick_active=args.kick_active, close_active=args.close_active,
-                             cancel_active=args.cancel_active, cancel_walk=args.cancel_walk))
+                             cancel_active=args.cancel_active, cancel_walk=args.cancel_walk,
+                             close_walk=args.close_walk))
         server.stop()
         server = None
         results["checks"].append("bds_clean_shutdown")
