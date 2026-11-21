@@ -390,7 +390,8 @@ jobs:
           .venv-client/bin/python nethernet_obstacle_probe.py \
             --server-python .venv-server/bin/python \
             --endpilot-commit "$ENDPILOT_COMMIT" \
-            --transport "${{ matrix.transport }}"
+            --transport "${{ matrix.transport }}" \
+            ${{ inputs.health_probe == 'kick-navigation' && '--kick-active' || '' }}
       - name: Verify actor spawn, movement and removal on the live client
         if: inputs.entity_probe && matrix.entity_scene == 'observe'
         shell: bash
