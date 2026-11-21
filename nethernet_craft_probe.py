@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--store", action="store_true", help="craft then store the output in a chest")
     parser.add_argument("--grid", action="store_true", help="craft from the 2x2 grid, not auto-craft")
+    parser.add_argument("--workbench", action="store_true", help="craft nine ingots on a 3x3 workbench")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -121,11 +122,33 @@ def main():
         assert chosen["ingredient_count"] > 0 and chosen["output_count"] > 0, chosen
         result["recipe"] = chosen
         result["checks"].append("server_advertised_recipe_and_net_id")
+        if args.workbench:
+            server.command("setblock 1 100 0 crafting_table")
+            start = server.command("testforblock 1 100 0 crafting_table")
+            server_has("successfully found", start)
+            result["checks"].append("bds_confirmed_workbench_block")
+
         start = server.command(
             f"give EndPilotTest {chosen['ingredient']} {chosen['ingredient_count']}"
         )
         server_has("gave", start)
         send("craft")
+        if args.workbench:
+            window = json.loads(until("workbench_window="))
+            assert window["type"] == "WORKBENCH", window
+            assert window["position"] == [1, 100, 0], window
+            result["window"] = window
+            result["checks"].append("server_opened_workbench_window")
+
+            stages = json.loads(until("grid_stages="))
+            assert len(stages) == 9, stages
+            assert [s["grid_slot"] for s in stages] == list(range(32, 41)), stages
+            assert all(s["result"] == "SUCCESS" for s in stages), stages
+            ids = [s["request_id"] for s in stages]
+            assert len(set(ids)) == 9 and all(i < 0 and i % 2 == 1 for i in ids), stages
+            assert [s["source_after"] for s in stages] == list(range(8, -1, -1)), stages
+            result["stages"] = stages
+            result["checks"].append("nine_workbench_slots_accepted_and_reconciled")
         if args.grid:
             staged = json.loads(until("grid_stage="))
             result["stage"] = staged
@@ -138,6 +161,8 @@ def main():
         crafted = json.loads(until("craft_result="))
         if args.grid:
             assert crafted["request_id"] != staged["request_id"], (staged, crafted)
+        if args.workbench:
+            assert crafted["request_id"] not in ids, (stages, crafted)
         result["craft"] = crafted
         assert crafted["result"] == "SUCCESS", crafted
         assert crafted["request_id"] < 0 and crafted["request_id"] % 2 == 1, crafted
@@ -156,6 +181,14 @@ def main():
         start = server.command("testforblock 2 100 0 gold_block")
         server_has("successfully found", start)
         result["checks"].append("bds_independently_confirmed_crafted_output")
+        if args.workbench:
+            server.command(
+                "execute as @a[hasitem={item=iron_ingot,quantity=1..}] "
+                "run setblock 3 100 0 diamond_block"
+            )
+            start = server.command("testforblock 3 100 0 air")
+            server_has("successfully found", start)
+            result["checks"].append("bds_confirmed_nine_inputs_consumed")
 
         if args.store:
             until("storage_chest_watch_ready")
