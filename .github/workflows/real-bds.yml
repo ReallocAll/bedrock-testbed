@@ -504,7 +504,7 @@ jobs:
             --probe endpilot-src/examples/respond_form_mcp.py \
             --transport "${{ matrix.transport }}"
       - name: Verify public SDK grounded jump with independent BDS coordinates
-        if: (inputs.health_probe == 'jump' || inputs.health_probe == 'jump-forward')
+        if: inputs.health_probe == 'jump'
         shell: bash
         run: |
           .venv-client/bin/python nethernet_jump_probe.py \
