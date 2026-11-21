@@ -108,6 +108,17 @@ def main():
         server.wait_player(True)
         until("spawned EndPilotTest")
         result["checks"].append("player_spawned")
+        catalog = json.loads(until("server_recipe_catalog=", timeout=20))
+        assert catalog["count"] > 0, catalog
+        assert catalog["recipe_id"] and int(catalog["net_id"]) >= 0, catalog
+        assert catalog["kind"] in (
+            "shaped_recipes", "shapeless_recipes", "user_data_shapeless_recipes",
+            "shapeless_chemistry_recipes", "shaped_chemistry_recipes",
+        ), catalog
+        assert catalog["first_result_id"] != 0 and catalog["first_result_count"] > 0, catalog
+        assert catalog["first_ingredient_count"] > 0, catalog
+        result["recipes"] = catalog
+        result["checks"].append("server_crafting_data_catalog_and_id_lookup")
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(3)
         filled(server, "fill -6 100 -6 6 107 6 air")

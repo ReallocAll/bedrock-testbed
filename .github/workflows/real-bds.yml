@@ -9,7 +9,7 @@ on:
         description: 'Exact EndPilot commit SHA (40 lowercase hex characters)'
         required: false
         type: string
-        default: '96045ce85d9ba373db64daab09cc7176e1e29a15'
+        default: '847c0382ed444916172e6643af3795cdfd43a5d8'
       settings_probe:
         description: 'Run only the new EndPilot NetherNet settings probe'
         required: false
@@ -150,7 +150,7 @@ jobs:
         suite: ${{ fromJSON((github.ref_name == 'main' || github.ref_name == 'test/navigation-frontier-20261101') && '["smoke","navigation"]' || '["branch"]') }}
     timeout-minutes: 30
     env:
-      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '96045ce85d9ba373db64daab09cc7176e1e29a15' }}
+      ENDPILOT_COMMIT: ${{ inputs.endpilot_commit || '847c0382ed444916172e6643af3795cdfd43a5d8' }}
     steps:
       - uses: actions/checkout@v4
         with:
