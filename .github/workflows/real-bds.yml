@@ -394,7 +394,8 @@ jobs:
             ${{ inputs.health_probe == 'kick-navigation' && '--kick-active' || '' }} \
             ${{ inputs.health_probe == 'close-navigation' && '--close-active' || '' }} \
             ${{ inputs.health_probe == 'cancel-navigation' && '--cancel-active' || '' }} \
-            ${{ inputs.health_probe == 'cancel-walk' && '--cancel-walk' || '' }}
+            ${{ inputs.health_probe == 'cancel-walk' && '--cancel-walk' || '' }} \
+            ${{ inputs.health_probe == 'close-walk' && '--close-walk' || '' }}
       - name: Verify actor spawn, movement and removal on the live client
         if: inputs.entity_probe && matrix.entity_scene == 'observe'
         shell: bash
