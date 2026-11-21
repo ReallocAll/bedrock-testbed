@@ -454,7 +454,7 @@ jobs:
             --probe ${{ inputs.health_probe == 'craft-grid' && 'endpilot-src/examples/craft_grid.py' || 'endpilot-src/examples/craft_recipe.py' }} \
             --transport "${{ matrix.transport }}" ${{ inputs.health_probe == 'craft-store' && '--store' || inputs.health_probe == 'craft-grid' && '--grid' || '' }}
       - name: Verify nine-ingot 3x3 crafting through the public SDK and real BDS
-        if: (inputs.health_probe == 'craft-workbench' || inputs.health_probe == 'craft-tool')
+        if: inputs.health_probe == 'craft-workbench'
         shell: bash
         run: |
           .venv-client/bin/python nethernet_craft_probe.py \
