@@ -279,9 +279,13 @@ jobs:
           test "$(git -C endpilot-src rev-parse HEAD)" = "$ENDPILOT_COMMIT"
           python -m venv .venv-client
           extras=nethernet,raknet
-          if [[ "${{ inputs.mcp_probe }}" == "true" ]]; then extras="$extras,mcp"; fi
+          if [[ "${{ inputs.mcp_probe }}" == "true" || "${{ inputs.health_probe }}" == "form" ]]; then extras="$extras,mcp"; fi
           .venv-client/bin/python -m pip install dependencies/protocol/*.whl \
             "endpilot[$extras] @ git+https://github.com/ReallocAll/endpilot.git@${ENDPILOT_COMMIT}"
+          if [[ "${{ inputs.health_probe }}" == "form" ]]; then
+            .venv-client/bin/python -m pip install --no-deps ./endpilot-src/examples/form_extension
+            .venv-client/bin/python -m unittest discover -s endpilot-src/examples/form_extension/tests -v
+          fi
           .venv-client/bin/python -m pip check
           .venv-client/bin/python -m pip show endpilot bedrock-protocol
       - name: Verify actual walking against fresh BDS
@@ -467,14 +471,14 @@ jobs:
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --probe endpilot-src/examples/observe_trades.py \
             --transport "${{ matrix.transport }}"
-      - name: Verify external action-form reply with server callback
+      - name: Verify installable MCP action-form extension with server callback
         if: inputs.health_probe == 'form'
         shell: bash
         run: |
           .venv-client/bin/python nethernet_form_probe.py \
             --server-python .venv-server/bin/python \
             --endpilot-commit "$ENDPILOT_COMMIT" \
-            --probe endpilot-src/examples/respond_form.py \
+            --probe endpilot-src/examples/respond_form_mcp.py \
             --transport "${{ matrix.transport }}"
       - name: Verify hotbar selection and held-item air-use on real BDS
         if: inputs.hotbar_probe
