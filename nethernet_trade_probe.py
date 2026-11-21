@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
+    parser.add_argument("--interrupt", action="store_true", help="cancel a staged trade through the public SDK")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -63,7 +64,8 @@ def main():
         url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
                else "raknet://127.0.0.1:19132")
         client = subprocess.Popen(
-            [sys.executable, str(args.probe.absolute()), url],
+            [sys.executable, str(args.probe.absolute()), url]
+            + (["--interrupt"] if args.interrupt else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -177,35 +179,70 @@ def main():
         ), staged
         result["checks"].append("server_accepted_trade_ingredient_and_reconciled_slots")
 
-        exchanged = json.loads(until("trade_exchange_result=", timeout=30))
-        result["exchange"] = exchanged
-        assert exchanged["result"] == "SUCCESS", exchanged
-        assert exchanged["request_id"] < staged["request_id"], exchanged
-        assert exchanged["output_slot"] == 9, exchanged
-        assert exchanged["output_id"] is not None and exchanged["output_id"] != 0, exchanged
-        assert exchanged["output_count"] == int(selected["sell"]["count"]), exchanged
-        assert any(
-            c["name"] in ("HOTBAR_CONTAINER", "INVENTORY_CONTAINER",
-                          "COMBINED_HOTBAR_AND_INVENTORY_CONTAINER")
-            and any(s["slot"] == 9 and s["amount"] == int(selected["sell"]["count"])
-                    for s in c["slots"])
-            for c in exchanged["containers"]
-        ), exchanged
-        result["checks"].append("server_accepted_exchange_and_output_slot_reconciled")
+        if args.interrupt:
+            until("trade_abort_ready")
+            send("abort")
+            unstaged = json.loads(until("trade_unstage_result=", timeout=30))
+            assert unstaged["result"] == "SUCCESS", unstaged
+            assert unstaged["request_id"] < staged["request_id"], unstaged
+            result["unstaged"] = unstaged
+            result["checks"].append("server_accepted_trade_input_return")
+            aborted = json.loads(until("trade_aborted=", timeout=30))
+            assert aborted["window_id"] == offers["window_id"], aborted
+            assert aborted["close_acknowledged"] is True, aborted
+            assert aborted["open_window"] is False, aborted
+            assert aborted["stale_exchange_blocked"] is True, aborted
+            assert aborted["original_count"] == staged["before"], aborted
+            observed_return = aborted["observed_count"] >= staged["before"]
+            assert observed_return is True, aborted
+            result["aborted"] = aborted
+            result["checks"].append("trade_cancel_ack_and_stale_quote_rejection")
 
-        # Independent BDS inventory oracle; SDK response alone is insufficient.
-        sell = selected["sell"]
-        server.command(
-            f"execute as @a[hasitem={{item={sell['name']},quantity={sell['count']}..}}] "
-            "run setblock 6 100 0 gold_block"
-        )
-        start = server.command("testforblock 6 100 0 gold_block")
-        wait_server("successfully found", start)
-        result["checks"].append("independent_bds_traded_output_inventory_oracle")
+            # Ask BDS independently whether the original stack returned. The
+            # close response alone does not guarantee an inventory correction.
+            selector = f"@a[hasitem={{item={material['name']},quantity={count}..}}]"
+            server.command(
+                f"execute if entity {selector} run setblock 6 100 0 gold_block"
+            )
+            server.command(
+                f"execute unless entity {selector} run setblock 6 100 0 diamond_block"
+            )
+            expected_block = "gold_block" if observed_return else "diamond_block"
+            start = server.command(f"testforblock 6 100 0 {expected_block}")
+            wait_server("successfully found", start)
+            result["bds_ingredient_returned"] = observed_return
+            result["checks"].append("independent_bds_inventory_matches_sdk_observation")
+        else:
+            exchanged = json.loads(until("trade_exchange_result=", timeout=30))
+            result["exchange"] = exchanged
+            assert exchanged["result"] == "SUCCESS", exchanged
+            assert exchanged["request_id"] < staged["request_id"], exchanged
+            assert exchanged["output_slot"] == 9, exchanged
+            assert exchanged["output_id"] is not None and exchanged["output_id"] != 0, exchanged
+            assert exchanged["output_count"] == int(selected["sell"]["count"]), exchanged
+            assert any(
+                c["name"] in ("HOTBAR_CONTAINER", "INVENTORY_CONTAINER",
+                              "COMBINED_HOTBAR_AND_INVENTORY_CONTAINER")
+                and any(s["slot"] == 9 and s["amount"] == int(selected["sell"]["count"])
+                        for s in c["slots"])
+                for c in exchanged["containers"]
+            ), exchanged
+            result["checks"].append("server_accepted_exchange_and_output_slot_reconciled")
 
-        closed = int(until("trade_window_closed=", timeout=15))
-        assert closed == offers["window_id"], (closed, offers)
-        result["checks"].append("trade_close_ack_matches_window")
+            # Independent BDS inventory oracle; SDK response alone is insufficient.
+            sell = selected["sell"]
+            server.command(
+                f"execute as @a[hasitem={{item={sell['name']},quantity={sell['count']}..}}] "
+                "run setblock 6 100 0 gold_block"
+            )
+            start = server.command("testforblock 6 100 0 gold_block")
+            wait_server("successfully found", start)
+            result["checks"].append("independent_bds_traded_output_inventory_oracle")
+
+            closed = int(until("trade_window_closed=", timeout=15))
+            assert closed == offers["window_id"], (closed, offers)
+            result["checks"].append("trade_close_ack_matches_window")
+
 
         send("close")
         until("disconnected EndPilotTest")
