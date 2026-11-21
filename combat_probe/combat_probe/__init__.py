@@ -13,6 +13,8 @@ class CombatProbe(Plugin):
 
     @event_handler
     def on_received(self, event: PacketReceiveEvent):
+        if event.packet_id == 44:
+            self.logger.info(f"swing_animate_received={len(event.payload)}")
         if event.packet_id == 30:
             self.logger.info(f"combat_packet_received={len(event.payload)}")
 
