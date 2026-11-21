@@ -126,7 +126,7 @@ def main():
         crafted = json.loads(until("craft_result="))
         result["craft"] = crafted
         assert crafted["result"] == "SUCCESS", crafted
-        assert crafted["request_id"] < 0 and crafted["request_id"] % 2 == -1, crafted
+        assert crafted["request_id"] < 0 and crafted["request_id"] % 2 == 1, crafted
         assert crafted["source_before"] >= chosen["ingredient_count"], crafted
         assert crafted["source_after"] == crafted["source_before"] - chosen["ingredient_count"], crafted
         assert crafted["output_id"] == chosen["output_id"], crafted
