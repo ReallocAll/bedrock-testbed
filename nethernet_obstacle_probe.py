@@ -17,7 +17,8 @@ from nethernet_walk_probe import filled
 from server import ROOT, Server, configure
 
 
-async def exercise(server: Server, transport: str, results: dict, kick_active: bool = False):
+async def exercise(server: Server, transport: str, results: dict,
+                   kick_active: bool = False, close_active: bool = False):
     bot = Bot("EndPilotTest")
     url = ("http://127.0.0.1:19132" if transport == "nethernet"
            else "raknet://127.0.0.1:19132")
@@ -61,44 +62,54 @@ async def exercise(server: Server, transport: str, results: dict, kick_active: b
         results["observed_blocks"] = dict(zip((str(p) for p in sampled), states))
         results["checks"].append("client_observed_air_solid_and_unknown")
 
-        if kick_active:
-            # Capture the real connection's disconnect before BDS issues the kick.
-            # A longer goal keeps navigation active while the server observes a detour.
-            ticker = bot._movement._ticker
-            disconnected = asyncio.create_task(bot.wait_for_server_disconnect(timeout=10))
-            await asyncio.sleep(0)
+        if kick_active or close_active:
+            # A longer goal keeps navigation active while BDS observes a detour.
+            movement = bot._movement
+            ticker = movement._ticker
+            if kick_active:
+                disconnected = asyncio.create_task(bot.wait_for_server_disconnect(timeout=10))
+                await asyncio.sleep(0)
             task = asyncio.create_task(bot.navigate_to((7, 100, 0), ticks=160))
             await asyncio.sleep(0.65)
             if task.done():
                 await task
-                raise AssertionError("Navigation finished before the server kick")
+                raise AssertionError("Navigation finished before the requested shutdown")
             detour = await asyncio.to_thread(server_target, server)
             results["detour"] = detour
             if detour["position"]["z"] < 0.75:
                 raise AssertionError(f"BDS did not observe active navigation detour: {detour}")
             results["checks"].append("bds_querytarget_confirms_active_navigation")
-            server.command("kick EndPilotTest EndPilotKickNavigation")
-            packet = await disconnected
-            try:
-                await asyncio.wait_for(task, 5)
-            except ConnectionError as error:
-                if "server disconnected" not in str(error):
-                    raise
-                results["kick"] = {
-                    "packet": type(packet).__name__,
-                    "action_error": type(error).__name__,
-                    "reason": str(error),
-                }
+            if close_active:
+                await asyncio.wait_for(bot.close(), 5)
+                frames = await asyncio.wait_for(task, 5)
+                if not 5 <= frames < 160:
+                    raise AssertionError(f"Close did not interrupt active navigation: {frames}")
+                results["close"] = {"submitted_frames": frames}
+                results["checks"].append("bot_close_interrupts_active_navigation")
             else:
-                raise AssertionError("Navigation returned successfully after BDS kick")
-            if results["kick"]["packet"] != "DisconnectPacket":
-                raise AssertionError(f"Missing typed BDS disconnect: {results['kick']}")
-            if bot._movement._active_done is not None:
+                server.command("kick EndPilotTest EndPilotKickNavigation")
+                packet = await disconnected
+                try:
+                    await asyncio.wait_for(task, 5)
+                except ConnectionError as error:
+                    if "server disconnected" not in str(error):
+                        raise
+                    results["kick"] = {
+                        "packet": type(packet).__name__,
+                        "action_error": type(error).__name__,
+                        "reason": str(error),
+                    }
+                else:
+                    raise AssertionError("Navigation returned successfully after BDS kick")
+                if results["kick"]["packet"] != "DisconnectPacket":
+                    raise AssertionError(f"Missing typed BDS disconnect: {results['kick']}")
+                results["checks"].append("bds_kick_interrupts_navigation")
+            if movement._active_done is not None:
                 raise AssertionError("Navigation left an active action behind")
             await asyncio.sleep(0)
             if not ticker.done():
-                raise AssertionError("Movement ticker survived BDS kick")
-            results["checks"].append("bds_kick_interrupts_navigation_and_ticker")
+                raise AssertionError("Movement ticker survived shutdown")
+            results["checks"].append("navigation_ticker_drained")
         else:
             task = asyncio.create_task(bot.navigate_to((3, 100, 0), ticks=120))
             await asyncio.sleep(0.65)
@@ -129,7 +140,10 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--kick-active", action="store_true")
+    parser.add_argument("--close-active", action="store_true")
     args = parser.parse_args()
+    if args.kick_active and args.close_active:
+        parser.error("--kick-active and --close-active are mutually exclusive")
     work = ROOT / "work"
     if work.exists():
         shutil.rmtree(work)
@@ -161,7 +175,8 @@ def main():
         server.start()
         server.wait_ready()
         results["checks"].append("fresh_bds_ready")
-        asyncio.run(exercise(server, args.transport, results, args.kick_active))
+        asyncio.run(exercise(server, args.transport, results,
+                             kick_active=args.kick_active, close_active=args.close_active))
         server.stop()
         server = None
         results["checks"].append("bds_clean_shutdown")
