@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--interrupt", action="store_true", help="cancel a staged trade through the public SDK")
+    parser.add_argument("--two-input", action="store_true", help="verify a quoted two-input trade")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -65,7 +66,8 @@ def main():
                else "raknet://127.0.0.1:19132")
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url]
-            + (["--interrupt"] if args.interrupt else []),
+            + (["--interrupt"] if args.interrupt else [])
+            + (["--two-input"] if args.two_input else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -125,14 +127,15 @@ def main():
         time.sleep(3)
         filled(server, "fill -6 100 -6 6 107 6 air")
         filled(server, "fill -6 99 -6 6 99 6 stone")
-        server.command("setblock 4 100 0 composter")
+        server.command("setblock 4 100 0 " + ("lectern" if args.two_input else "composter"))
         server.command("tp EndPilotTest 0.5 100 0.5")
         server.command("gamemode survival EndPilotTest")
         time.sleep(0.5)
 
         send("watch")
         until("villager_watch_ready")
-        start = server.command("summon villager 2 100 0 0 0 minecraft:become_farmer")
+        profession = "librarian" if args.two_input else "farmer"
+        start = server.command(f"summon villager 2 100 0 0 0 minecraft:become_{profession}")
         spawned = json.loads(until("villager_spawn="))
         assert spawned["actor_type"] in ("minecraft:villager", "minecraft:villager_v2"), spawned
         assert int(spawned["runtime_id"]) > 0, spawned
@@ -144,7 +147,7 @@ def main():
         offers = json.loads(until("villager_quotes=", timeout=25))
         assert offers["trader_unique_id"] == spawned["entity_id"], (offers, spawned)
         assert int(offers["window_id"]) >= 0, offers
-        assert "farmer" in offers["display_name"].lower(), offers
+        assert profession in offers["display_name"].lower(), offers
         assert offers["offers"], offers
         assert any(
             quote["buy_a"] is not None and quote["sell"] is not None
@@ -154,117 +157,179 @@ def main():
         result["trade"] = offers
         result["checks"].append("server_trade_quote_with_item_pricing")
 
-        selected = next(
-            quote for quote in offers["offers"]
-            if quote["buy_a"] is not None and quote["buy_b"] is None
-            and quote["uses"] is not None and quote["max_uses"] is not None
-            and quote["uses"] < quote["max_uses"]
-        )
-        material = selected["buy_a"]
-        assert re.fullmatch(r"minecraft:[a-z0-9_]+", material["name"]), material
-        count = int(material["count"])
-        assert 1 <= count <= 64, material
-        server.command(f"give EndPilotTest {material['name']} {count}")
-        send("stage")
-        staged = json.loads(until("trade_ingredient_result=", timeout=30))
-        result["staged"] = staged
-        assert staged["result"] == "SUCCESS", staged
-        assert staged["before"] >= count, staged
-        assert staged["after"] == staged["before"] - count, staged
-        assert staged["amount"] == count, staged
-        assert any(
-            c["name"] in ("TRADE_INGREDIENT_1_CONTAINER", "TRADE2_INGREDIENT_1_CONTAINER")
-            and any(slot["amount"] == count for slot in c["slots"])
-            for c in staged["input_containers"]
-        ), staged
-        result["checks"].append("server_accepted_trade_ingredient_and_reconciled_slots")
+        if args.two_input:
+            selected = next((
+                quote for quote in offers["offers"]
+                if quote["buy_a"] is not None and quote["buy_b"] is not None
+                and quote["sell"] is not None and quote["recipe_net_id"] is not None
+                and quote["uses"] is not None and quote["max_uses"] is not None
+                and quote["uses"] < quote["max_uses"]
+            ), None)
+            assert selected is not None, "no server-issued two-input librarian quote"
+            reported = json.loads(until("two_input_offer=", timeout=10))
+            assert reported == selected, (reported, selected)
+            result["selected_two_input_offer"] = selected
+            previous_request = 0
+            for number, material in enumerate((selected["buy_a"], selected["buy_b"]), 1):
+                assert re.fullmatch(r"minecraft:[a-z0-9_]+", material["name"]), material
+                count = int(material["count"])
+                assert 1 <= count <= 64, material
+                server.command(f"give EndPilotTest {material['name']} {count}")
+                send("stage")
+                staged = json.loads(until(f"trade_input_{number}_result=", timeout=30))
+                assert staged["result"] == "SUCCESS", staged
+                assert staged["ingredient"] == number and staged["name"] == material["name"], staged
+                assert staged["amount"] == count and staged["before"] >= count, staged
+                assert staged["after"] == staged["before"] - count, staged
+                assert staged["request_id"] < previous_request, staged
+                assert any(
+                    c["name"] == f"TRADE2_INGREDIENT_{number}_CONTAINER"
+                    and any(slot["slot"] == number + 3 and slot["amount"] == count
+                            for slot in c["slots"])
+                    for c in staged["input_containers"]
+                ), staged
+                result[f"input_{number}"] = staged
+                result["checks"].append(f"bds_accepted_confirmed_trade_input_{number}")
+                previous_request = staged["request_id"]
 
-        if args.interrupt:
-            until("trade_abort_ready")
-            send("abort")
-            unstaged = json.loads(until("trade_unstage_result=", timeout=30))
-            assert unstaged["result"] == "SUCCESS", unstaged
-            assert unstaged["request_id"] < staged["request_id"], unstaged
-            result["unstaged"] = unstaged
-            result["checks"].append("server_accepted_trade_input_return")
-            aborted = json.loads(until("trade_aborted=", timeout=30))
-            assert aborted["window_id"] == offers["window_id"], aborted
-            assert aborted["close_acknowledged"] is True, aborted
-            assert aborted["open_window"] is False, aborted
-            assert aborted["stale_exchange_blocked"] is True, aborted
-            assert aborted["original_count"] == staged["before"], aborted
-            observed_return = aborted["observed_count"] >= staged["before"]
-            assert observed_return is True, aborted
-            result["aborted"] = aborted
-            result["checks"].append("trade_cancel_ack_and_stale_quote_rejection")
-
-            # Ask BDS independently whether the original stack returned. The
-            # close response alone does not guarantee an inventory correction.
-            selector = f"@a[hasitem={{item={material['name']},quantity={count}..}}]"
-            server.command(
-                f"execute if entity {selector} run setblock 6 100 0 gold_block"
-            )
-            server.command(
-                f"execute unless entity {selector} run setblock 6 100 0 diamond_block"
-            )
-            expected_block = "gold_block" if observed_return else "diamond_block"
-            start = server.command(f"testforblock 6 100 0 {expected_block}")
-            wait_server("successfully found", start)
-            result["bds_ingredient_returned"] = observed_return
-            result["checks"].append("independent_bds_inventory_matches_sdk_observation")
-
-            send("retry")
-            retried = json.loads(until("trade_retry_result=", timeout=35))
-            assert retried["uses_after_reopen"] == retried["uses_before"] == selected["uses"], retried
-            assert retried["stage_result"] == retried["result"] == "SUCCESS", retried
-            assert retried["stage_request_id"] < unstaged["request_id"], retried
-            assert retried["request_id"] < retried["stage_request_id"], retried
-            assert retried["output_slot"] == 9 and retried["output_id"] != 0, retried
-            assert retried["output_count"] == selected["sell"]["count"], retried
-            assert retried["ingredient_after"] == staged["before"] - count, retried
-            assert retried["closed_window"] == retried["reopened_window"], retried
-            result["retry"] = retried
-            result["checks"].append("fresh_quote_retry_accepted_after_cancel")
-
-            sell = selected["sell"]
-            server.command(
-                f"execute as @a[hasitem={{item={sell['name']},quantity={sell['count']}..}}] "
-                "run setblock 5 100 0 gold_block"
-            )
-            start = server.command("testforblock 5 100 0 gold_block")
-            wait_server("successfully found", start)
-            result["checks"].append("independent_bds_retried_trade_output_oracle")
-        else:
             exchanged = json.loads(until("trade_exchange_result=", timeout=30))
             result["exchange"] = exchanged
             assert exchanged["result"] == "SUCCESS", exchanged
-            assert exchanged["request_id"] < staged["request_id"], exchanged
-            assert exchanged["output_slot"] == 9, exchanged
-            assert exchanged["output_id"] is not None and exchanged["output_id"] != 0, exchanged
-            assert exchanged["output_count"] == int(selected["sell"]["count"]), exchanged
+            assert exchanged["request_id"] < previous_request, exchanged
+            assert exchanged["output_slot"] == 9 and exchanged["output_id"] != 0, exchanged
+            assert exchanged["output_count"] == selected["sell"]["count"], exchanged
             assert any(
                 c["name"] in ("HOTBAR_CONTAINER", "INVENTORY_CONTAINER",
                               "COMBINED_HOTBAR_AND_INVENTORY_CONTAINER")
-                and any(s["slot"] == 9 and s["amount"] == int(selected["sell"]["count"])
-                        for s in c["slots"])
+                and any(p["slot"] == 9 and p["amount"] == selected["sell"]["count"]
+                        for p in c["slots"])
                 for c in exchanged["containers"]
             ), exchanged
-            result["checks"].append("server_accepted_exchange_and_output_slot_reconciled")
-
-            # Independent BDS inventory oracle; SDK response alone is insufficient.
+            result["checks"].append("bds_confirmed_two_input_exchange_and_output")
             sell = selected["sell"]
+            assert re.fullmatch(r"minecraft:[a-z0-9_]+", sell["name"]), sell
             server.command(
                 f"execute as @a[hasitem={{item={sell['name']},quantity={sell['count']}..}}] "
                 "run setblock 6 100 0 gold_block"
             )
             start = server.command("testforblock 6 100 0 gold_block")
             wait_server("successfully found", start)
-            result["checks"].append("independent_bds_traded_output_inventory_oracle")
-
+            result["checks"].append("independent_bds_two_input_output_oracle")
             closed = int(until("trade_window_closed=", timeout=15))
             assert closed == offers["window_id"], (closed, offers)
-            result["checks"].append("trade_close_ack_matches_window")
-
+            result["checks"].append("two_input_window_close_ack")
+        else:
+            selected = next(
+                quote for quote in offers["offers"]
+                if quote["buy_a"] is not None and quote["buy_b"] is None
+                and quote["uses"] is not None and quote["max_uses"] is not None
+                and quote["uses"] < quote["max_uses"]
+            )
+            material = selected["buy_a"]
+            assert re.fullmatch(r"minecraft:[a-z0-9_]+", material["name"]), material
+            count = int(material["count"])
+            assert 1 <= count <= 64, material
+            server.command(f"give EndPilotTest {material['name']} {count}")
+            send("stage")
+            staged = json.loads(until("trade_ingredient_result=", timeout=30))
+            result["staged"] = staged
+            assert staged["result"] == "SUCCESS", staged
+            assert staged["before"] >= count, staged
+            assert staged["after"] == staged["before"] - count, staged
+            assert staged["amount"] == count, staged
+            assert any(
+                c["name"] in ("TRADE_INGREDIENT_1_CONTAINER", "TRADE2_INGREDIENT_1_CONTAINER")
+                and any(slot["amount"] == count for slot in c["slots"])
+                for c in staged["input_containers"]
+            ), staged
+            result["checks"].append("server_accepted_trade_ingredient_and_reconciled_slots")
+    
+            if args.interrupt:
+                until("trade_abort_ready")
+                send("abort")
+                unstaged = json.loads(until("trade_unstage_result=", timeout=30))
+                assert unstaged["result"] == "SUCCESS", unstaged
+                assert unstaged["request_id"] < staged["request_id"], unstaged
+                result["unstaged"] = unstaged
+                result["checks"].append("server_accepted_trade_input_return")
+                aborted = json.loads(until("trade_aborted=", timeout=30))
+                assert aborted["window_id"] == offers["window_id"], aborted
+                assert aborted["close_acknowledged"] is True, aborted
+                assert aborted["open_window"] is False, aborted
+                assert aborted["stale_exchange_blocked"] is True, aborted
+                assert aborted["original_count"] == staged["before"], aborted
+                observed_return = aborted["observed_count"] >= staged["before"]
+                assert observed_return is True, aborted
+                result["aborted"] = aborted
+                result["checks"].append("trade_cancel_ack_and_stale_quote_rejection")
+    
+                # Ask BDS independently whether the original stack returned. The
+                # close response alone does not guarantee an inventory correction.
+                selector = f"@a[hasitem={{item={material['name']},quantity={count}..}}]"
+                server.command(
+                    f"execute if entity {selector} run setblock 6 100 0 gold_block"
+                )
+                server.command(
+                    f"execute unless entity {selector} run setblock 6 100 0 diamond_block"
+                )
+                expected_block = "gold_block" if observed_return else "diamond_block"
+                start = server.command(f"testforblock 6 100 0 {expected_block}")
+                wait_server("successfully found", start)
+                result["bds_ingredient_returned"] = observed_return
+                result["checks"].append("independent_bds_inventory_matches_sdk_observation")
+    
+                send("retry")
+                retried = json.loads(until("trade_retry_result=", timeout=35))
+                assert retried["uses_after_reopen"] == retried["uses_before"] == selected["uses"], retried
+                assert retried["stage_result"] == retried["result"] == "SUCCESS", retried
+                assert retried["stage_request_id"] < unstaged["request_id"], retried
+                assert retried["request_id"] < retried["stage_request_id"], retried
+                assert retried["output_slot"] == 9 and retried["output_id"] != 0, retried
+                assert retried["output_count"] == selected["sell"]["count"], retried
+                assert retried["ingredient_after"] == staged["before"] - count, retried
+                assert retried["closed_window"] == retried["reopened_window"], retried
+                result["retry"] = retried
+                result["checks"].append("fresh_quote_retry_accepted_after_cancel")
+    
+                sell = selected["sell"]
+                server.command(
+                    f"execute as @a[hasitem={{item={sell['name']},quantity={sell['count']}..}}] "
+                    "run setblock 5 100 0 gold_block"
+                )
+                start = server.command("testforblock 5 100 0 gold_block")
+                wait_server("successfully found", start)
+                result["checks"].append("independent_bds_retried_trade_output_oracle")
+            else:
+                exchanged = json.loads(until("trade_exchange_result=", timeout=30))
+                result["exchange"] = exchanged
+                assert exchanged["result"] == "SUCCESS", exchanged
+                assert exchanged["request_id"] < staged["request_id"], exchanged
+                assert exchanged["output_slot"] == 9, exchanged
+                assert exchanged["output_id"] is not None and exchanged["output_id"] != 0, exchanged
+                assert exchanged["output_count"] == int(selected["sell"]["count"]), exchanged
+                assert any(
+                    c["name"] in ("HOTBAR_CONTAINER", "INVENTORY_CONTAINER",
+                                  "COMBINED_HOTBAR_AND_INVENTORY_CONTAINER")
+                    and any(s["slot"] == 9 and s["amount"] == int(selected["sell"]["count"])
+                            for s in c["slots"])
+                    for c in exchanged["containers"]
+                ), exchanged
+                result["checks"].append("server_accepted_exchange_and_output_slot_reconciled")
+    
+                # Independent BDS inventory oracle; SDK response alone is insufficient.
+                sell = selected["sell"]
+                server.command(
+                    f"execute as @a[hasitem={{item={sell['name']},quantity={sell['count']}..}}] "
+                    "run setblock 6 100 0 gold_block"
+                )
+                start = server.command("testforblock 6 100 0 gold_block")
+                wait_server("successfully found", start)
+                result["checks"].append("independent_bds_traded_output_inventory_oracle")
+    
+                closed = int(until("trade_window_closed=", timeout=15))
+                assert closed == offers["window_id"], (closed, offers)
+                result["checks"].append("trade_close_ack_matches_window")
+    
 
         send("close")
         until("disconnected EndPilotTest")
