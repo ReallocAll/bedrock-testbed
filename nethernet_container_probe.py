@@ -34,6 +34,8 @@ def main():
     parser.add_argument("--server-close", action="store_true", help="BDS breaks the open chest")
     parser.add_argument("--drop", action="store_true", help="drop one item after taking two from chest")
     parser.add_argument("--split", action="store_true", help="split one chest-taken stack into two player slots")
+    parser.add_argument("--swap", action="store_true",
+                        help="swap two different occupied player inventory slots")
     args = parser.parse_args()
     work = ROOT / "work"
     if work.exists():
@@ -72,14 +74,15 @@ def main():
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url]
             + (["--take-count", "1" if args.equip else "2", "--destination-slot", "2"]
-               if (args.take or args.put or args.equip or args.drop or args.chat_during_take or args.server_grant_during_take) else [])
+               if (args.take or args.put or args.equip or args.drop or args.chat_during_take or args.server_grant_during_take or args.swap) else [])
             + (["--chat-during-take"] if args.chat_during_take else [])
             + (["--server-grant-during-take"] if args.server_grant_during_take else [])
             + (["--put-back-count", "1"] if args.put else [])
             + (["--equip-armor-slot", "0"] if args.equip else [])
             + (["--expect-server-close"] if args.server_close else [])
             + (["--drop-count", "1"] if args.drop else [])
-            + (["--split-slot", "3"] if args.split else []),
+            + (["--split-slot", "3"] if args.split else [])
+            + (["--swap-slot", "3"] if args.swap else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -197,7 +200,7 @@ def main():
             result["checks"].append("client_observed_independent_server_inventory_update")
 
         if (args.take or args.put or args.equip or args.drop
-                or args.chat_during_take or args.server_grant_during_take):
+                or args.chat_during_take or args.server_grant_during_take or args.swap):
             transfer = json.loads(until("container_take_response="))
             assert transfer["request_id"] < 0 and transfer["request_id"] % 2 != 0, transfer
             assert transfer["result"] == "SUCCESS", transfer
@@ -304,6 +307,35 @@ def main():
                 start = server.command(f"testforblock {slot} 100 1 {block}")
                 server_has("successfully found", start)
             result["checks"].append("bds_independently_confirmed_both_hotbar_slot_counts")
+
+        if args.swap:
+            until("swap_ready")
+            start = server.command("replaceitem entity EndPilotTest slot.hotbar 3 stone 1")
+            server_has("replaced", start)
+            send("swap_grant_done")
+            swapped = json.loads(until("inventory_swap_response="))
+            assert swapped["result"] == "SUCCESS", swapped
+            assert swapped["request_id"] == -3, swapped
+            assert swapped["source_before"] == [item["item_id"], 2], swapped
+            stone_id = swapped["target_before"][0]
+            assert stone_id > 0 and stone_id != item["item_id"], swapped
+            assert swapped["target_before"][1] == 1, swapped
+            assert swapped["source_after"] == [stone_id, 1], swapped
+            assert swapped["target_after"] == [item["item_id"], 2], swapped
+            result["swap"] = swapped
+            result["checks"].append("server_accepted_two_occupied_inventory_slot_swap")
+            for slot, name, count, marker in (
+                (2, "stone", 1, "gold_block"),
+                (3, "dirt", 2, "diamond_block"),
+            ):
+                server.command(
+                    f"execute as @a[hasitem={{item={name},quantity={count},"
+                    f"location=slot.hotbar,slot={slot}}}] "
+                    f"run setblock {slot} 100 2 {marker}"
+                )
+                start = server.command(f"testforblock {slot} 100 2 {marker}")
+                server_has("successfully found", start)
+            result["checks"].append("bds_independently_confirmed_swapped_item_ids_and_counts")
 
         if args.equip:
             screen = json.loads(until("player_inventory_opened="))
