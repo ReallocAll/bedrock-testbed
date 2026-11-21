@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--respawn", action="store_true")
+    parser.add_argument("--hunger", action="store_true")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -140,6 +141,46 @@ def main():
             if frames != 24 or after["z"] - before["z"] < 0.65:
                 raise AssertionError(f"BDS did not accept post-respawn movement: {result['post_respawn_walk']}")
             result["checks"].append("bds_querytarget_confirms_post_respawn_walking")
+        elif args.hunger:
+            # Exercise the public SDK watcher; BDS owns the food-level changes.
+            send("watch")
+            until("hunger_watcher_ready")
+            # PEACEFUL automatically restores hunger and masks food exhaustion.
+            server.command("difficulty normal")
+            server.command("replaceitem entity EndPilotTest slot.hotbar 0 apple 2")
+            time.sleep(0.8)
+            server.command("effect EndPilotTest hunger 3 100 true")
+            depleted = float(until("hunger_after_effect=", timeout=25))
+            if not 0 <= depleted < 20:
+                raise AssertionError(f"BDS hunger effect did not lower food level: {depleted}")
+            result["hunger_after_effect"] = depleted
+            result["checks"].append("bds_hunger_effect_reported_in_sdk")
+
+            # Let the effect expire so its continuing drain cannot obscure the
+            # increase from consuming food; do not rely on input submission alone.
+            time.sleep(3.5)
+            send("eat")
+            submitted = int(until("food_use_submitted=", timeout=15))
+            restored = float(until("hunger_after_food=", timeout=20))
+            if submitted != 1 or restored <= depleted:
+                raise AssertionError(f"Food was not accepted: {depleted} -> {restored}")
+            result["hunger_after_food"] = restored
+            result["checks"].append("bds_food_level_increased_after_public_use_item")
+
+            # Independently verify that BDS consumed precisely one held apple.
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                marker = "bds_consumed_one_apple"
+                start = server.command(
+                    "execute as @a[hasitem={item=apple,quantity=1..1,"
+                    "location=slot.weapon.mainhand}] run say " + marker
+                )
+                time.sleep(0.3)
+                if any(marker in line for line in server.snapshot(start)):
+                    break
+            else:
+                raise AssertionError("BDS did not report one remaining held apple")
+            result["checks"].append("bds_apple_stack_decremented_two_to_one")
         else:
             send("watch")
             until("health_watcher_ready")
