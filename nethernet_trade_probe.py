@@ -30,7 +30,11 @@ def main():
     parser.add_argument("--two-input", action="store_true", help="verify a quoted two-input trade")
     parser.add_argument("--server-interrupt", action="store_true",
                         help="kick the player after the server accepts trade staging")
+    parser.add_argument("--reconnect", action="store_true",
+                        help="rejoin the kicked player and compare inventory to BDS")
     args = parser.parse_args()
+    if args.reconnect and not args.server_interrupt:
+        parser.error("--reconnect requires --server-interrupt")
 
     work = ROOT / "work"
     if work.exists():
@@ -70,7 +74,8 @@ def main():
             [sys.executable, str(args.probe.absolute()), url]
             + (["--interrupt"] if args.interrupt else [])
             + (["--two-input"] if args.two_input else [])
-            + (["--server-interrupt"] if args.server_interrupt else []),
+            + (["--server-interrupt"] if args.server_interrupt else [])
+            + (["--reconnect"] if args.reconnect else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -267,6 +272,35 @@ def main():
                 server.wait_player(False)
                 result["interruption"] = interrupted
                 result["checks"].append("bds_initiated_disconnect_after_confirmed_stage")
+                if args.reconnect:
+                    send("rejoin")
+                    recovered = json.loads(until("trade_reconnected=", timeout=40))
+                    server.wait_player(True)
+                    assert recovered["item_id"] != 0, recovered
+                    assert recovered["expected_count"] == staged["before"], recovered
+                    assert recovered["observed_slots"] >= 9, recovered
+                    assert recovered["open_window"] is False, recovered
+                    assert recovered["stale_exchange_blocked"] is True, recovered
+                    result["reconnected"] = recovered
+                    result["checks"].append("same_bot_rejoined_with_fresh_inventory_and_no_trade_window")
+
+                    # Independent server oracle: the kick need not refund a staged
+                    # ingredient. Compare BDS's persisted inventory with the SDK.
+                    selector = f"@a[hasitem={{item={material['name']},quantity={count}..}}]"
+                    server.command(
+                        f"execute if entity {selector} run setblock 6 100 0 gold_block"
+                    )
+                    server.command(
+                        f"execute unless entity {selector} run setblock 6 100 0 diamond_block"
+                    )
+                    expected_block = (
+                        "gold_block" if recovered["observed_count"] >= count
+                        else "diamond_block"
+                    )
+                    start = server.command(f"testforblock 6 100 0 {expected_block}")
+                    wait_server("successfully found", start)
+                    result["bds_ingredient_available"] = expected_block == "gold_block"
+                    result["checks"].append("independent_bds_reconnect_inventory_oracle")
             elif args.interrupt:
                 until("trade_abort_ready")
                 send("abort")
@@ -354,7 +388,7 @@ def main():
                 result["checks"].append("trade_close_ack_matches_window")
     
 
-        if not args.server_interrupt:
+        if not args.server_interrupt or args.reconnect:
             send("close")
         until("disconnected EndPilotTest")
         assert client.wait(timeout=10) == 0, client.returncode
