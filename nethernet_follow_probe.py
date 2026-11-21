@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--stop", action="store_true")
     parser.add_argument("--close-active", action="store_true")
+    parser.add_argument("--cancel-active", action="store_true")
     parser.add_argument("--kick-active", action="store_true")
     parser.add_argument("--switch", action="store_true")
     args = parser.parse_args()
@@ -69,7 +70,8 @@ def main():
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url] +
             (["--switch"] if args.switch else ["--stop"] if args.stop else
-             ["--close-active"] if args.close_active else ["--kick-active"] if args.kick_active else []),
+             ["--close-active"] if args.close_active else ["--kick-active"] if args.kick_active else
+             ["--cancel-active"] if args.cancel_active else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1,
         )
@@ -136,6 +138,36 @@ def main():
             if not (5 <= payload["frames"] < 160):
                 raise AssertionError(f"Closing did not interrupt active follow: {payload}")
             outcome["checks"].append("active_follow_interrupted_by_bot_close")
+        elif args.cancel_active:
+            send("cancel")
+            payload = json.loads(until("follow_cancelled=", timeout=12))
+            if payload.get("cancelled") is not True:
+                raise AssertionError(f"Follow task did not report cancellation: {payload}")
+            outcome["cancel"] = payload
+            outcome["checks"].append("public_follow_task_cancelled")
+            # Compare independent BDS positions after release input has settled.
+            time.sleep(.4)
+            settled = server_target(server)
+            time.sleep(.7)
+            rested = server_target(server)
+            outcome["settled"] = settled
+            outcome["rested"] = rested
+            drift = abs(rested["position"]["x"] - settled["position"]["x"])
+            outcome["stopped_displacement_x"] = drift
+            if drift > .35:
+                raise AssertionError(f"BDS still moving after follow cancellation: {settled} -> {rested}")
+            outcome["checks"].append("server_observed_stop_after_task_cancel")
+            send("resume")
+            resumed = json.loads(until("follow_resumed_walk=", timeout=12))
+            if resumed["frames"] != 8:
+                raise AssertionError(f"Same Bot did not submit eight resumed frames: {resumed}")
+            outcome["resume"] = resumed
+            time.sleep(.4)
+            after = server_target(server)
+            outcome["after_resume"] = after
+            if rested["position"]["x"] - after["position"]["x"] < .25:
+                raise AssertionError(f"BDS did not accept movement after cancellation: {rested} -> {after}")
+            outcome["checks"].append("server_observed_new_walk_on_same_bot")
         elif args.kick_active:
             until("follow_kick_watcher_ready")
             send("kick")
