@@ -25,6 +25,8 @@ def main():
     parser.add_argument("--probe", type=Path, required=True)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--take", action="store_true", help="take half the chest stack")
+    parser.add_argument("--chat-during-take", action="store_true",
+                        help="submit chat while an item response is pending")
     parser.add_argument("--put", action="store_true", help="take two and place one back")
     parser.add_argument("--equip", action="store_true", help="take a helmet and equip it after closing")
     parser.add_argument("--server-close", action="store_true", help="BDS breaks the open chest")
@@ -68,7 +70,8 @@ def main():
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url]
             + (["--take-count", "1" if args.equip else "2", "--destination-slot", "2"]
-               if (args.take or args.put or args.equip or args.drop) else [])
+               if (args.take or args.put or args.equip or args.drop or args.chat_during_take) else [])
+            + (["--chat-during-take"] if args.chat_during_take else [])
             + (["--put-back-count", "1"] if args.put else [])
             + (["--equip-armor-slot", "0"] if args.equip else [])
             + (["--expect-server-close"] if args.server_close else [])
@@ -165,7 +168,17 @@ def main():
         result["server_chest_contents"] = contents
         result["checks"].append("server_confirmed_chest_slots")
 
-        if args.take or args.put or args.equip or args.drop:
+        if args.chat_during_take:
+            chat = json.loads(until("chat_during_take="))
+            assert chat == {
+                "message": "endpilot-container-interleave",
+                "item_request_pending_at_chat": True,
+            }, chat
+            server_has("endpilot-container-interleave", 0)
+            result["chat_during_take"] = chat
+            result["checks"].append("bds_received_chat_while_item_response_was_pending")
+
+        if args.take or args.put or args.equip or args.drop or args.chat_during_take:
             transfer = json.loads(until("container_take_response="))
             assert transfer["request_id"] < 0 and transfer["request_id"] % 2 != 0, transfer
             assert transfer["result"] == "SUCCESS", transfer
@@ -173,6 +186,14 @@ def main():
             assert transfer["inventory_count"] == (1 if args.equip else 2), transfer
             result["transfer"] = transfer
             result["checks"].append("server_accepted_chest_stack_split_into_inventory")
+            if args.chat_during_take:
+                server.command(
+                    "execute as @a[hasitem={item=dirt,quantity=2}] "
+                    "run setblock 2 100 0 gold_block"
+                )
+                start = server.command("testforblock 2 100 0 gold_block")
+                server_has("successfully found", start)
+                result["checks"].append("bds_independently_confirmed_two_dirt_after_chat")
         if args.put:
             returned = json.loads(until("container_put_response="))
             assert returned["request_id"] < 0 and returned["request_id"] % 2 != 0, returned
