@@ -26,7 +26,7 @@ def main():
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--kick", action="store_true", help="Assert a BDS kick after placement")
     parser.add_argument("--timeout", action="store_true", help="Assert block wait times out while BDS stays connected")
-    parser.add_argument("--side-face", action="store_true", help="Place against the west side (face=4)")
+    parser.add_argument("--face", type=int, choices=(1, 4, 5), default=1, help="Prepared support face")
     args = parser.parse_args()
     work = ROOT / "work"
     if work.exists():
@@ -94,7 +94,7 @@ def main():
             [sys.executable, str(args.probe.absolute()), url, "--name", "EndPilotTest"]
             + (["--expect-kick"] if args.kick else [])
             + (["--check-timeout"] if args.timeout else [])
-            + (["--side-face"] if args.side_face else []),
+            + (["--face", str(args.face)] if args.face != 1 else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -136,14 +136,13 @@ def main():
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(1.0)
 
-        support_positions = (
-            ((3, 100, 0), (5, 100, 0))
-            if args.side_face else ((2, 99, 0), (3, 99, 0))
-        )
-        target_positions = (
-            ((2, 100, 0), (4, 100, 0))
-            if args.side_face else ((2, 100, 0), (3, 100, 0))
-        )
+        if args.face in (4, 5):
+            target_positions = ((2, 100, 0), (4, 100, 0))
+            dx = 1 if args.face == 4 else -1
+            support_positions = tuple((x + dx, y, z) for x, y, z in target_positions)
+        else:
+            support_positions = ((2, 99, 0), (3, 99, 0))
+            target_positions = ((2, 100, 0), (3, 100, 0))
 
         input_line("watch")
         until("support_watchers_ready")
@@ -182,7 +181,7 @@ def main():
             target_positions, (1, 0), ("air", "gold_block")
         )):
             x, y, z = target
-            if args.side_face:
+            if args.face in (4, 5):
                 # Keep each clicked support within normal player reach without intersecting it.
                 server.command(f"tp EndPilotTest {x - 0.5} 100 1.5")
                 time.sleep(0.8)
@@ -192,7 +191,7 @@ def main():
             submitted = json.loads(line.partition("placement_submitted=")[2])
             assert (
                 submitted["position"] == list(target)
-                and submitted["face"] == (4 if args.side_face else 1)
+                and submitted["face"] == args.face
                 and submitted["tick"] > 0
             ), submitted
             server_has(f"placement_gate_event={index + 1} cancelled={cancelled}", offset)
@@ -211,7 +210,7 @@ def main():
                 "endstone_cancel_and_bds_air" if cancelled else "endstone_allow_bds_gold_and_client_update"
             )
 
-        result["face"] = 4 if args.side_face else 1
+        result["face"] = args.face
         until("placement_checks_ready")
         if args.kick:
             server.command("kick EndPilotTest EndPilotKickProbe")
