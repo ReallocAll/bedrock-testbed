@@ -148,7 +148,7 @@ def main():
             result["checks"].append("bds_granted_shield_to_offhand")
             send("grant")
             observed = json.loads(until("offhand_observed="))
-            assert observed["item_id"] > 0, observed
+            assert observed["item_id"] == 358, observed
             assert observed["count"] == 1, observed
             result["offhand"] = observed
             result["checks"].append("client_observed_bds_offhand_item")
@@ -160,12 +160,12 @@ def main():
             server_has("successfully found", start)
             result["checks"].append("bds_independently_confirmed_offhand_shield")
             server.command(
-                "execute unless entity @a[hasitem={item=shield,location=slot.hotbar,slot=2}] "
+                "execute unless entity @a[hasitem={item=shield,location=slot.hotbar}] "
                 "run setblock 3 100 0 diamond_block"
             )
             start = server.command("testforblock 3 100 0 diamond_block")
             server_has("successfully found", start)
-            result["checks"].append("bds_confirmed_shield_removed_from_hotbar")
+            result["checks"].append("bds_confirmed_shield_absent_from_hotbar")
             send("disconnect")
             until("disconnected EndPilotTest")
             assert client.wait(timeout=10) == 0
