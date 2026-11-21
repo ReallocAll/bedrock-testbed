@@ -462,7 +462,7 @@ jobs:
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --probe endpilot-src/examples/craft_workbench.py \
             --transport "${{ matrix.transport }}" --workbench
-      - name: Verify server-quoted wooden pickaxe on 3x3 workbench
+      - name: Verify workbench wooden pickaxe crafting and chest storage
         if: inputs.health_probe == 'craft-tool'
         shell: bash
         run: |
@@ -470,7 +470,7 @@ jobs:
             --server-python .venv-server/bin/python \
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --probe endpilot-src/examples/craft_pickaxe.py \
-            --transport "${{ matrix.transport }}" --tool
+            --transport "${{ matrix.transport }}" --tool --store
       - name: Verify real BDS furnace smelting, output and optional chest storage
         if: (inputs.health_probe == 'furnace' || inputs.health_probe == 'furnace-store')
         shell: bash
