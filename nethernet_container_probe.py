@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--equip", action="store_true", help="take a helmet and equip it after closing")
     parser.add_argument("--server-close", action="store_true", help="BDS breaks the open chest")
     parser.add_argument("--drop", action="store_true", help="drop one item after taking two from chest")
+    parser.add_argument("--split", action="store_true", help="split one chest-taken stack into two player slots")
     args = parser.parse_args()
     work = ROOT / "work"
     if work.exists():
@@ -71,7 +72,8 @@ def main():
             + (["--put-back-count", "1"] if args.put else [])
             + (["--equip-armor-slot", "0"] if args.equip else [])
             + (["--expect-server-close"] if args.server_close else [])
-            + (["--drop-count", "1"] if args.drop else []),
+            + (["--drop-count", "1"] if args.drop else [])
+            + (["--split-slot", "3"] if args.split else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -226,6 +228,30 @@ def main():
             start = server.command("testforblock 3 100 0 diamond_block")
             server_has("successfully found", start)
             result["checks"].append("bds_independently_confirmed_world_drop")
+
+        if args.split:
+            screen = json.loads(until("player_inventory_opened="))
+            assert isinstance(screen["id"], int) and screen["id"] >= 0, screen
+            result["checks"].append("server_confirmed_inventory_screen_for_split")
+            split = json.loads(until("inventory_split_response="))
+            assert split["request_id"] == -3, split
+            assert split["result"] == "SUCCESS", split
+            assert (split["source_before"], split["source_after"],
+                    split["target_count"]) == (2, 1, 1), split
+            assert split["source_item_id"] == split["target_item_id"] == item["item_id"], split
+            result["split"] = split
+            result["checks"].append("server_accepted_player_stack_split_and_reconciled_slots")
+            screen_closed = json.loads(until("player_inventory_closed="))
+            assert screen_closed["id"] == screen["id"] and screen_closed["open_window"] is False
+            result["checks"].append("server_confirmed_inventory_screen_close")
+            for slot, block in ((2, "gold_block"), (3, "diamond_block")):
+                server.command(
+                    f"execute as @a[hasitem={{item=dirt,quantity=1,"
+                    f"location=slot.hotbar,slot={slot}}}] run setblock {slot} 100 1 {block}"
+                )
+                start = server.command(f"testforblock {slot} 100 1 {block}")
+                server_has("successfully found", start)
+            result["checks"].append("bds_independently_confirmed_both_hotbar_slot_counts")
 
         if args.equip:
             screen = json.loads(until("player_inventory_opened="))
