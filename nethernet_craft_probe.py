@@ -27,7 +27,8 @@ def main():
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--store", action="store_true", help="craft then store the output in a chest")
     parser.add_argument("--grid", action="store_true", help="craft from the 2x2 grid, not auto-craft")
-    parser.add_argument("--workbench", action="store_true", help="craft nine ingots on a 3x3 workbench")
+    parser.add_argument("--workbench", action="store_true", help="craft iron blocks on a 3x3 workbench")
+    parser.add_argument("--workbench-times", type=int, default=1, help="iron blocks per workbench request")
     parser.add_argument("--tool", action="store_true", help="craft a wooden pickaxe on a 3x3 workbench")
     parser.add_argument("--equip", action="store_true", help="verify crafted output in the player mainhand")
     args = parser.parse_args()
@@ -68,7 +69,8 @@ def main():
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url]
             + (["--store"] if args.store else [])
-            + (["--equip"] if args.equip else []),
+            + (["--equip"] if args.equip else [])
+            + (["--times", str(args.workbench_times)] if args.workbench else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -131,6 +133,9 @@ def main():
             assert chosen["ingredient_count"] > 0, chosen
         assert re.fullmatch(r"minecraft:[a-z0-9_]+", chosen["output"]), chosen
         assert chosen["output_count"] > 0, chosen
+        if args.workbench:
+            assert chosen["crafts"] == args.workbench_times, chosen
+            assert chosen["ingredient_count"] == 9, chosen
         result["recipe"] = chosen
         result["checks"].append("server_advertised_recipe_and_net_id")
         if args.workbench or args.tool:
@@ -147,7 +152,8 @@ def main():
                 server_has("gave", start)
         else:
             start = server.command(
-                f"give EndPilotTest {chosen['ingredient']} {chosen['ingredient_count']}"
+                f"give EndPilotTest {chosen['ingredient']} "
+                f"{chosen['ingredient_count'] * (args.workbench_times if args.workbench else 1)}"
             )
             server_has("gave", start)
         send("craft")
@@ -165,7 +171,8 @@ def main():
             assert all(s["result"] == "SUCCESS" for s in stages), stages
             ids = [s["request_id"] for s in stages]
             assert len(set(ids)) == len(expected_slots) and all(i < 0 and i % 2 == 1 for i in ids), stages
-            expected_remaining = [2, 1, 0, 1, 0] if args.tool else list(range(8, -1, -1))
+            expected_remaining = ([2, 1, 0, 1, 0] if args.tool else
+                                  [i * args.workbench_times for i in range(8, -1, -1)])
             assert [s["source_after"] for s in stages] == expected_remaining, stages
             result["stages"] = stages
             result["checks"].append("workbench_ingredients_accepted_and_reconciled")
@@ -187,18 +194,20 @@ def main():
         assert crafted["result"] == "SUCCESS", crafted
         assert crafted["request_id"] < 0 and crafted["request_id"] % 2 == 1, crafted
         expected_consumed = (sum(i["count"] for i in chosen["ingredients"]) if args.tool
-                             else chosen["ingredient_count"])
+                             else chosen["ingredient_count"] *
+                             (args.workbench_times if args.workbench else 1))
         assert crafted["source_before"] >= expected_consumed, crafted
         assert crafted["source_after"] == crafted["source_before"] - expected_consumed, crafted
         assert crafted["output_id"] == chosen["output_id"], crafted
-        assert crafted["output_count"] == chosen["output_count"], crafted
+        expected_output = chosen["output_count"] * (args.workbench_times if args.workbench else 1)
+        assert crafted["output_count"] == expected_output, crafted
         result["checks"].append("matching_item_stack_response_and_inventory_slots")
 
         # Independent authority: only a BDS player with the crafted output
         # can place the oracle block through the server's execute command.
         server.command(
             f"execute as @a[hasitem={{item={chosen['output']},"
-            f"quantity={chosen['output_count']}..}}] run setblock 2 100 0 gold_block"
+            f"quantity={expected_output}..}}] run setblock 2 100 0 gold_block"
         )
         start = server.command("testforblock 2 100 0 gold_block")
         server_has("successfully found", start)
