@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--grid", action="store_true", help="craft from the 2x2 grid, not auto-craft")
     parser.add_argument("--workbench", action="store_true", help="craft nine ingots on a 3x3 workbench")
     parser.add_argument("--tool", action="store_true", help="craft a wooden pickaxe on a 3x3 workbench")
+    parser.add_argument("--equip", action="store_true", help="verify crafted output in the player mainhand")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -66,7 +67,8 @@ def main():
                else "raknet://127.0.0.1:19132")
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url]
-            + (["--store"] if args.store else []),
+            + (["--store"] if args.store else [])
+            + (["--equip"] if args.equip else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -211,6 +213,31 @@ def main():
                 start = server.command(f"testforblock {offset} 100 0 air")
                 server_has("successfully found", start)
             result["checks"].append("bds_confirmed_workbench_inputs_consumed")
+
+        if args.equip:
+            # The client marker proves only that a hotbar request was sent.
+            selected = json.loads(until("equipped_selection="))
+            assert selected == {
+                "slot": crafted["destination_slot"],
+                "item_id": chosen["output_id"],
+                "count": chosen["output_count"],
+            }, selected
+            result["selection"] = selected
+            result["checks"].append("public_sdk_selected_crafted_hotbar_slot")
+            marker = "bds_crafted_mainhand_confirmed"
+            for _ in range(30):
+                offset = server.command(
+                    f"execute as @a[hasitem={{item={chosen['output']},"
+                    f"location=slot.weapon.mainhand}}] run say {marker}"
+                )
+                time.sleep(0.25)
+                if any(marker in line for line in server.snapshot(offset)):
+                    break
+                if server.process.poll() is not None:
+                    raise RuntimeError("BDS exited before equipped-item confirmation")
+            else:
+                raise AssertionError("BDS did not report the crafted tool in mainhand")
+            result["checks"].append("bds_independently_confirmed_crafted_mainhand")
 
         if args.store:
             until("storage_chest_watch_ready")
