@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--endpilot-commit", required=True)
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
+    parser.add_argument("--handoff", action="store_true")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -137,6 +138,10 @@ def main():
         time.sleep(.4)
         after = server_target(server)
         result["resumed"] = resumed
+        if args.handoff:
+            if resumed.get("controller") != "python_sdk":
+                raise AssertionError("script did not resume with direct SDK control: " + str(resumed))
+            result["checks"].append("same_live_player_handed_to_python_sdk")
         result["after"] = after
         if after["position"]["z"] - resting["position"]["z"] < .3:
             raise AssertionError("BDS did not observe follow-up walk on same connection")
