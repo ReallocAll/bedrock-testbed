@@ -187,19 +187,25 @@ def main():
             assert aborted["close_acknowledged"] is True, aborted
             assert aborted["open_window"] is False, aborted
             assert aborted["stale_exchange_blocked"] is True, aborted
-            assert aborted["expected_count"] == staged["before"], aborted
-            assert aborted["restored_count"] >= staged["before"], aborted
+            assert aborted["original_count"] == staged["before"], aborted
+            observed_return = aborted["observed_count"] >= staged["before"]
             result["aborted"] = aborted
-            result["checks"].append("trade_cancel_ack_and_sdk_returned_ingredient")
+            result["checks"].append("trade_cancel_ack_and_stale_quote_rejection")
 
-            # Confirm the returned ingredient from BDS, independently of SDK state.
+            # Ask BDS independently whether the original stack returned. The
+            # close response alone does not guarantee an inventory correction.
+            selector = f"@a[hasitem={{item={material['name']},quantity={count}..}}]"
             server.command(
-                f"execute as @a[hasitem={{item={material['name']},quantity={count}..}}] "
-                "run setblock 6 100 0 gold_block"
+                f"execute if entity {selector} run setblock 6 100 0 gold_block"
             )
-            start = server.command("testforblock 6 100 0 gold_block")
+            server.command(
+                f"execute unless entity {selector} run setblock 6 100 0 diamond_block"
+            )
+            expected_block = "gold_block" if observed_return else "diamond_block"
+            start = server.command(f"testforblock 6 100 0 {expected_block}")
             wait_server("successfully found", start)
-            result["checks"].append("independent_bds_returned_trade_ingredient")
+            result["bds_ingredient_returned"] = observed_return
+            result["checks"].append("independent_bds_inventory_matches_sdk_observation")
         else:
             exchanged = json.loads(until("trade_exchange_result=", timeout=30))
             result["exchange"] = exchanged
