@@ -205,6 +205,14 @@ def main():
                         for p in c["slots"])
                 for c in exchanged["containers"]
             ), exchanged
+            for number in (1, 2):
+                assert any(
+                    c["name"] == f"TRADE2_INGREDIENT_{number}_CONTAINER"
+                    and any(p["slot"] == number + 3 and p["amount"] == 0
+                            for p in c["slots"])
+                    for c in exchanged["containers"]
+                ), exchanged
+            result["checks"].append("bds_confirmed_both_trade_inputs_consumed")
             result["checks"].append("bds_confirmed_two_input_exchange_and_output")
             sell = selected["sell"]
             assert re.fullmatch(r"minecraft:[a-z0-9_]+", sell["name"]), sell
