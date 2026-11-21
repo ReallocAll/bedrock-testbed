@@ -392,7 +392,8 @@ jobs:
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --transport "${{ matrix.transport }}" \
             ${{ inputs.health_probe == 'kick-navigation' && '--kick-active' || '' }} \
-            ${{ inputs.health_probe == 'close-navigation' && '--close-active' || '' }}
+            ${{ inputs.health_probe == 'close-navigation' && '--close-active' || '' }} \
+            ${{ inputs.health_probe == 'cancel-navigation' && '--cancel-active' || '' }}
       - name: Verify actor spawn, movement and removal on the live client
         if: inputs.entity_probe && matrix.entity_scene == 'observe'
         shell: bash
