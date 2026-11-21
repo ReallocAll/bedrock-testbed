@@ -95,6 +95,11 @@ on:
         required: false
         type: boolean
         default: false
+      player_probe:
+        description: 'With chat_probe=true, verify another player joins, moves and leaves'
+        required: false
+        type: boolean
+        default: false
       command_probe:
         description: 'Verify a player command output and BDS block effect'
         required: false
@@ -353,15 +358,16 @@ jobs:
             --transport "${{ matrix.transport }}" \
             ${{ inputs.kick_probe && '--kick' || '' }} \
             ${{ inputs.timeout_probe && '--timeout' || '' }}
-      - name: Verify player-to-player chat through fresh real BDS
+      - name: Verify two-player chat or remote-player observation on real BDS
         if: inputs.chat_probe
         shell: bash
         run: |
           .venv-client/bin/python nethernet_settings_probe.py \
             --server-python .venv-server/bin/python \
             --endpilot-commit "$ENDPILOT_COMMIT" \
-            --probe endpilot-src/examples/chat.py \
-            --transport "${{ matrix.transport }}" --chat
+            --probe "${{ inputs.player_probe && 'endpilot-src/examples/observe_players.py' || 'endpilot-src/examples/chat.py' }}" \
+            --transport "${{ matrix.transport }}" \
+            ${{ inputs.player_probe && '--players' || '--chat' }}
       - name: Verify player command and server-side block effect
         if: inputs.command_probe
         shell: bash

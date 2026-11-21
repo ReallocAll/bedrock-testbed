@@ -51,6 +51,7 @@ def main() -> int:
     parser.add_argument("--join", action="store_true")
     parser.add_argument("--position", action="store_true")
     parser.add_argument("--chat", action="store_true", help="Verify two BDS players exchange chat")
+    parser.add_argument("--players", action="store_true", help="Observe another BDS player join, move, and leave")
     parser.add_argument("--command", action="store_true", help="Verify player command response and BDS effect")
     parser.add_argument("--refused", action="store_true", help="Require explicit full-server rejection")
     parser.add_argument("--transport", choices=("nethernet", "raknet"), default="nethernet")
@@ -223,6 +224,102 @@ def main() -> int:
                     process.communicate()
             server.wait_player(False, timeout=20)
             results["checks"].append("command_player_left_bds_list_empty")
+
+        elif args.players:
+            process = subprocess.Popen(
+                command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                def until(marker, timeout=30):
+                    deadline = time.monotonic() + timeout
+                    while time.monotonic() < deadline:
+                        readable, _, _ = select.select([process.stdout], [], [], 0.2)
+                        if readable:
+                            line = process.stdout.readline().strip()
+                            if line:
+                                print("[players] " + line, flush=True)
+                            if line.startswith(marker):
+                                return line.removeprefix(marker)
+                        if process.poll() is not None:
+                            raise AssertionError(
+                                f"player observer exited before {marker}: {process.returncode}"
+                            )
+                    raise TimeoutError(f"client did not emit {marker}")
+
+                until("both_spawned")
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    online, lines = server.player_online()
+                    if online and "EndPilotObserver" in "\n".join(lines) and "EndPilotTest" in "\n".join(lines):
+                        break
+                    time.sleep(0.2)
+                else:
+                    raise TimeoutError("BDS did not list both players")
+                results["checks"].append("bds_independently_listed_both_players")
+
+                # Prepare flat ground at the player's actual BDS location.
+                initial = server_position(server)
+                floor_x = math.floor(float(initial["x"]))
+                floor_y = math.floor(float(initial["y"])) - 1
+                floor_z = math.floor(float(initial["z"]))
+                server.command(
+                    f"fill {floor_x - 4} {floor_y} {floor_z - 4} "
+                    f"{floor_x + 5} {floor_y} {floor_z + 15} stone"
+                )
+                server.command(
+                    f"tp EndPilotTest {floor_x + 0.5} {floor_y + 1.62} {floor_z + 0.5}"
+                )
+                time.sleep(0.6)
+                before = server_position(server)
+                process.stdin.write("observe\n")
+                process.stdin.flush()
+                spawn = json.loads(until("player_spawn_observed="))
+                assert spawn["name"] == "EndPilotTest" and spawn["runtime_id"] > 0, spawn
+                assert spawn["unique_id"] > 0, spawn
+                results["player_spawn"] = spawn
+                results["checks"].append("sdk_observed_other_player_spawn_and_unique_id")
+                until("player_ready")
+                process.stdin.write("go\n")
+                process.stdin.flush()
+
+                move = json.loads(until("player_move_observed=", timeout=35))
+                assert move["runtime_id"] == spawn["runtime_id"], move
+                assert move["submitted_frames"] == 24, move
+                until("movement_ready")
+                after = server_position(server)
+                delta_client = float(move["position"][2]) - float(spawn["position"][2])
+                delta_bds = float(after["z"]) - float(before["z"])
+                assert delta_client > 0.5 and delta_bds > 0.5, (
+                    spawn, move, before, after
+                )
+                assert abs(float(move["position"][2]) - float(after["z"])) < 1.5, (
+                    move, after
+                )
+                results["player_move"] = {
+                    "client_delta_z": delta_client, "bds_delta_z": delta_bds,
+                    "bds_before": before, "bds_after": after, "client": move,
+                }
+                results["checks"].append("other_player_move_observed_by_sdk_and_bds")
+
+                process.stdin.write("close\n")
+                process.stdin.flush()
+                until("player_removed")
+                stdout, stderr = process.communicate(timeout=15)
+                if stdout:
+                    print("[players] " + stdout.strip(), flush=True)
+                if stderr:
+                    print(stderr, file=sys.stderr, flush=True)
+                assert process.returncode == 0 and "both_disconnected" in stdout, (
+                    process.returncode, stdout, stderr
+                )
+                results["checks"].append("other_player_removed_from_observer_snapshot")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
+            server.wait_player(False, timeout=20)
+            results["checks"].append("player_list_empty_after_both_disconnected")
         elif args.chat:
             process = subprocess.Popen(
                 command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
