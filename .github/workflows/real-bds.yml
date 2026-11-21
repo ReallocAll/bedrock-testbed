@@ -434,7 +434,7 @@ jobs:
             --server-python .venv-server/bin/python \
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --probe endpilot-src/examples/open_container.py \
-            --transport "${{ matrix.transport }}" ${{ inputs.health_probe == 'container-split' && '--take --split' || inputs.health_probe == 'container-take' && '--take' || inputs.health_probe == 'container-put' && '--put' || inputs.health_probe == 'container-equip' && '--equip' || inputs.health_probe == 'container-server-close' && '--server-close' || '' }}
+            --transport "${{ matrix.transport }}" ${{ inputs.health_probe == 'container-split' && '--take --split' || inputs.health_probe == 'container-take' && '--take --chat-during-take' || inputs.health_probe == 'container-put' && '--put' || inputs.health_probe == 'container-equip' && '--equip' || inputs.health_probe == 'container-server-close' && '--server-close' || '' }}
       - name: Verify a player inventory drop and actual BDS world item
         if: inputs.health_probe == 'drop'
         shell: bash
