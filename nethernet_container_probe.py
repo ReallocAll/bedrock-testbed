@@ -34,6 +34,8 @@ def main():
     parser.add_argument("--server-close", action="store_true", help="BDS breaks the open chest")
     parser.add_argument("--drop", action="store_true", help="drop one item after taking two from chest")
     parser.add_argument("--split", action="store_true", help="split one chest-taken stack into two player slots")
+    parser.add_argument("--split-late-grant", action="store_true",
+                        help="replace the split destination after BDS reply but before SDK handles it")
     parser.add_argument("--swap", action="store_true",
                         help="swap two different occupied player inventory slots")
     parser.add_argument("--swap-late-grant", action="store_true",
@@ -84,6 +86,7 @@ def main():
             + (["--expect-server-close"] if args.server_close else [])
             + (["--drop-count", "1"] if args.drop else [])
             + (["--split-slot", "3"] if args.split else [])
+            + (["--split-late-grant"] if args.split_late_grant else [])
             + (["--swap-slot", "3"] if args.swap else [])
             + (["--swap-late-grant"] if args.swap_late_grant else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -291,20 +294,41 @@ def main():
             screen = json.loads(until("player_inventory_opened="))
             assert isinstance(screen["id"], int) and screen["id"] >= 0, screen
             result["checks"].append("server_confirmed_inventory_screen_for_split")
+            if args.split_late_grant:
+                until("split_reply_received_before_grant")
+                start = server.command(
+                    "replaceitem entity EndPilotTest slot.hotbar 3 diamond 1"
+                )
+                server_has("replaced", start)
+                send("split_late_grant_done")
+                result["checks"].append("bds_granted_split_destination_after_reply")
             split = json.loads(until("inventory_split_response="))
             assert split["request_id"] == -3, split
             assert split["result"] == "SUCCESS", split
             assert (split["source_before"], split["source_after"],
                     split["target_count"]) == (2, 1, 1), split
-            assert split["source_item_id"] == split["target_item_id"] == item["item_id"], split
+            assert split["source_item_id"] == item["item_id"], split
+            if args.split_late_grant:
+                assert split["target_item_id"] not in (0, item["item_id"]), split
+                slot_oracles = (
+                    (2, "dirt", "gold_block"),
+                    (3, "diamond", "diamond_block"),
+                )
+                result["checks"].append("client_preserved_newer_split_destination")
+            else:
+                assert split["target_item_id"] == item["item_id"], split
+                slot_oracles = (
+                    (2, "dirt", "gold_block"),
+                    (3, "dirt", "diamond_block"),
+                )
             result["split"] = split
             result["checks"].append("server_accepted_player_stack_split_and_reconciled_slots")
             screen_closed = json.loads(until("player_inventory_closed="))
             assert screen_closed["id"] == screen["id"] and screen_closed["open_window"] is False
             result["checks"].append("server_confirmed_inventory_screen_close")
-            for slot, block in ((2, "gold_block"), (3, "diamond_block")):
+            for slot, name, block in slot_oracles:
                 server.command(
-                    f"execute as @a[hasitem={{item=dirt,quantity=1,"
+                    f"execute as @a[hasitem={{item={name},quantity=1,"
                     f"location=slot.hotbar,slot={slot}}}] run setblock {slot} 100 1 {block}"
                 )
                 start = server.command(f"testforblock {slot} 100 1 {block}")
