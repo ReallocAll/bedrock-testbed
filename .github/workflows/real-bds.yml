@@ -381,7 +381,7 @@ jobs:
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --probe endpilot-src/examples/follow_entity.py \
             --transport "${{ matrix.transport }}" \
-            ${{ inputs.stop_probe && (inputs.health_probe == 'kick-follow' && '--kick-active' || inputs.health_probe == 'close-follow' && '--close-active' || '--stop') || '' }} \
+            ${{ inputs.stop_probe && (inputs.health_probe == 'kick-follow' && '--kick-active' || inputs.health_probe == 'close-follow' && '--close-active' || inputs.health_probe == 'cancel-follow' && '--cancel-active' || '--stop') || '' }} \
             ${{ inputs.switch_probe && '--switch' || '' }}
       - name: Verify observed-flat-ground route around a real BDS obstacle
         if: inputs.obstacle_probe
