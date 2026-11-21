@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import re
 import select
 import shutil
@@ -231,17 +232,28 @@ def main() -> int:
                 stderr=subprocess.PIPE, text=True,
             )
             try:
+                # Use the file descriptor, not TextIOWrapper.read() plus select:
+                # decoded lines can stay buffered after the FD becomes unreadable.
+                buffered = bytearray()
+
                 def until(marker, timeout=30):
                     deadline = time.monotonic() + timeout
                     while time.monotonic() < deadline:
-                        readable, _, _ = select.select([process.stdout], [], [], 0.2)
-                        if readable:
-                            line = process.stdout.readline().strip()
+                        newline = buffered.find(b"\n")
+                        if newline >= 0:
+                            line = bytes(buffered[:newline]).decode(errors="replace").strip()
+                            del buffered[:newline + 1]
                             if line:
                                 print("[players] " + line, flush=True)
                             if line.startswith(marker):
                                 return line.removeprefix(marker)
-                        if process.poll() is not None:
+                            continue
+                        readable, _, _ = select.select([process.stdout], [], [], 0.2)
+                        if readable:
+                            data = os.read(process.stdout.fileno(), 4096)
+                            if data:
+                                buffered.extend(data)
+                        if process.poll() is not None and not buffered:
                             raise AssertionError(
                                 f"player observer exited before {marker}: {process.returncode}"
                             )
@@ -307,12 +319,13 @@ def main() -> int:
                 process.stdin.flush()
                 until("player_removed")
                 stdout, stderr = process.communicate(timeout=15)
-                if stdout:
-                    print("[players] " + stdout.strip(), flush=True)
+                tail = buffered.decode(errors="replace") + stdout
+                if tail:
+                    print("[players] " + tail.strip(), flush=True)
                 if stderr:
                     print(stderr, file=sys.stderr, flush=True)
-                assert process.returncode == 0 and "both_disconnected" in stdout, (
-                    process.returncode, stdout, stderr
+                assert process.returncode == 0 and "both_disconnected" in tail, (
+                    process.returncode, tail, stderr
                 )
                 results["checks"].append("other_player_removed_from_observer_snapshot")
             finally:
