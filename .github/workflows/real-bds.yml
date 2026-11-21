@@ -106,7 +106,7 @@ on:
         type: boolean
         default: false
       health_probe:
-        description: 'Use true for health, mcp-walk, mcp-handoff, respawn, hunger, container, container-split, container-split-late-grant, trade, trade-interrupt, trade-two-input, trade-server-interrupt, trade-reconnect, trade-original, form, craft, craft-store, craft-grid, craft-workbench, craft-workbench-batch, craft-tool, furnace, furnace-store, sneak, swing, jump, jump-backward, jump-left, jump-right, jump-forward-diagonal, jump-backward-diagonal, hop-forward, hop-backward, hop-lateral, hop-forward-diagonal, hop-backward-diagonal, sprint, sprint-jump or drop/offhand; container-swap-late-grant verifies an ordered slot update'
+        description: 'Use true for health, mcp-walk, mcp-handoff, respawn, hunger, container, container-split, container-split-late-grant, trade, trade-interrupt, trade-two-input, trade-server-interrupt, trade-reconnect, trade-original, form, craft, craft-store, craft-grid, craft-workbench, craft-workbench-batch, craft-tool, furnace, furnace-store, sneak, swing, jump, jump-backward, jump-left, jump-right, jump-forward-diagonal, jump-backward-diagonal, hop-forward, hop-backward, hop-lateral, hop-forward-diagonal, hop-backward-diagonal, sprint, sprint-jump or drop/offhand/players (players requires chat_probe=true); container-swap-late-grant verifies an ordered slot update'
         required: false
         type: string
         default: ''
@@ -353,15 +353,16 @@ jobs:
             --transport "${{ matrix.transport }}" \
             ${{ inputs.kick_probe && '--kick' || '' }} \
             ${{ inputs.timeout_probe && '--timeout' || '' }}
-      - name: Verify player-to-player chat through fresh real BDS
+      - name: Verify two-player chat or remote-player observation on real BDS
         if: inputs.chat_probe
         shell: bash
         run: |
           .venv-client/bin/python nethernet_settings_probe.py \
             --server-python .venv-server/bin/python \
             --endpilot-commit "$ENDPILOT_COMMIT" \
-            --probe endpilot-src/examples/chat.py \
-            --transport "${{ matrix.transport }}" --chat
+            --probe "${{ inputs.health_probe == 'players' && 'endpilot-src/examples/observe_players.py' || 'endpilot-src/examples/chat.py' }}" \
+            --transport "${{ matrix.transport }}" \
+            ${{ inputs.health_probe == 'players' && '--players' || '--chat' }}
       - name: Verify player command and server-side block effect
         if: inputs.command_probe
         shell: bash
