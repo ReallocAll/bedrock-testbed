@@ -470,7 +470,7 @@ jobs:
             --server-python .venv-server/bin/python \
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --probe endpilot-src/examples/craft_pickaxe.py \
-            --transport "${{ matrix.transport }}" --tool --store
+            --transport "${{ matrix.transport }}" --tool --store --equip
       - name: Verify real BDS furnace smelting, output and optional chest storage
         if: (inputs.health_probe == 'furnace' || inputs.health_probe == 'furnace-store')
         shell: bash
