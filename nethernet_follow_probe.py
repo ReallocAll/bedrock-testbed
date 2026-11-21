@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--stop", action="store_true")
     parser.add_argument("--close-active", action="store_true")
+    parser.add_argument("--kick-active", action="store_true")
     parser.add_argument("--switch", action="store_true")
     args = parser.parse_args()
     work = ROOT / "work"
@@ -68,7 +69,7 @@ def main():
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url] +
             (["--switch"] if args.switch else ["--stop"] if args.stop else
-             ["--close-active"] if args.close_active else []),
+             ["--close-active"] if args.close_active else ["--kick-active"] if args.kick_active else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1,
         )
@@ -135,6 +136,15 @@ def main():
             if not (5 <= payload["frames"] < 160):
                 raise AssertionError(f"Closing did not interrupt active follow: {payload}")
             outcome["checks"].append("active_follow_interrupted_by_bot_close")
+        elif args.kick_active:
+            until("follow_kick_watcher_ready")
+            send("kick")
+            server.command("kick EndPilotTest EndPilotKickFollow")
+            payload = json.loads(until("follow_kicked=", timeout=15))
+            outcome["kick"] = payload
+            if payload["packet"] != "DisconnectPacket" or payload["action_error"] != "ConnectionError":
+                raise AssertionError(f"Follow did not propagate the typed server kick: {payload}")
+            outcome["checks"].append("server_kick_interrupts_active_follow")
         elif args.switch:
             until("follow_switch_watcher_ready")
             server.command("summon cow 6 100 0")
@@ -202,7 +212,7 @@ def main():
                 raise AssertionError(f"Too few moving input frames: {payload}")
             outcome["checks"].append("bds_target_teleport_then_server_observed_eastward_chase")
 
-        if not args.close_active:
+        if not (args.close_active or args.kick_active):
             send("close")
         until("disconnected EndPilotTest")
         if client.wait(timeout=10) != 0:
