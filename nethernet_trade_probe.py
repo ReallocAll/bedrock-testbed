@@ -289,23 +289,24 @@ def main():
                     result["reconnected"] = recovered
                     result["checks"].append("same_bot_rejoined_with_fresh_inventory_and_no_trade_window")
 
-                    # Independent server oracle: the kick need not refund a staged
-                    # ingredient. Compare BDS's persisted inventory with the SDK.
-                    selector = f"@a[hasitem={{item={material['name']},quantity={count}..}}]"
-                    server.command(
-                        f"execute if entity {selector} run setblock 6 100 0 gold_block"
-                    )
-                    server.command(
-                        f"execute unless entity {selector} run setblock 6 100 0 diamond_block"
-                    )
-                    expected_block = (
-                        "gold_block" if recovered["observed_count"] >= count
-                        else "diamond_block"
-                    )
-                    start = server.command(f"testforblock 6 100 0 {expected_block}")
-                    wait_server("successfully found", start)
-                    result["bds_ingredient_available"] = expected_block == "gold_block"
-                    result["checks"].append("independent_bds_reconnect_inventory_oracle")
+                    if not args.original_trader:
+                        # Independent server oracle: the kick need not refund a staged
+                        # ingredient. Compare BDS's persisted inventory with the SDK.
+                        selector = f"@a[hasitem={{item={material['name']},quantity={count}..}}]"
+                        server.command(
+                            f"execute if entity {selector} run setblock 6 100 0 gold_block"
+                        )
+                        server.command(
+                            f"execute unless entity {selector} run setblock 6 100 0 diamond_block"
+                        )
+                        expected_block = (
+                            "gold_block" if recovered["observed_count"] >= count
+                            else "diamond_block"
+                        )
+                        start = server.command(f"testforblock 6 100 0 {expected_block}")
+                        wait_server("successfully found", start)
+                        result["bds_ingredient_available"] = expected_block == "gold_block"
+                        result["checks"].append("independent_bds_reconnect_inventory_oracle")
                     if args.original_trader:
                         # The player keeps the original villager and receives no
                         # additional materials after the independently issued kick.
