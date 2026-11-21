@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--kick", action="store_true", help="Assert a BDS kick after placement")
     parser.add_argument("--timeout", action="store_true", help="Assert block wait times out while BDS stays connected")
+    parser.add_argument("--side-face", action="store_true", help="Place against the west side (face=4)")
     args = parser.parse_args()
     work = ROOT / "work"
     if work.exists():
@@ -92,7 +93,8 @@ def main():
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url, "--name", "EndPilotTest"]
             + (["--expect-kick"] if args.kick else [])
-            + (["--check-timeout"] if args.timeout else []),
+            + (["--check-timeout"] if args.timeout else [])
+            + (["--side-face"] if args.side_face else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -134,23 +136,32 @@ def main():
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(1.0)
 
+        support_positions = (
+            ((3, 100, 0), (5, 100, 0))
+            if args.side_face else ((2, 99, 0), (3, 99, 0))
+        )
+        target_positions = (
+            ((2, 100, 0), (4, 100, 0))
+            if args.side_face else ((2, 100, 0), (3, 100, 0))
+        )
+
         input_line("watch")
         until("support_watchers_ready")
-        server.command("setblock 2 99 0 gold_block")
-        server.command("setblock 3 99 0 gold_block")
+        for x, y, z in support_positions:
+            server.command(f"setblock {x} {y} {z} gold_block")
         supports = json.loads(until("supports_observed=").partition("supports_observed=")[2])
         assert len(supports) == 2 and all(int(i) > 0 for i in supports), supports
         result["support_runtime_ids"] = supports
         result["checks"].append("client_observed_actual_support_blocks")
 
-        # Discover the target's air runtime ID on the client before either placement.
-        for x in (2, 3):
-            server.command(f"setblock {x} 100 0 stone")
+        # Observe initial target air via BDS block updates, not local prediction.
+        for x, y, z in target_positions:
+            server.command(f"setblock {x} {y} {z} stone")
         time.sleep(0.5)
         input_line("baseline")
         until("target_watchers_ready")
-        for x in (2, 3):
-            server.command(f"setblock {x} 100 0 air")
+        for x, y, z in target_positions:
+            server.command(f"setblock {x} {y} {z} air")
         targets = json.loads(until("targets_observed=").partition("targets_observed=")[2])
         assert len(targets) == 2 and all(
             int(targets[i]) != int(supports[i]) for i in range(2)
@@ -167,18 +178,29 @@ def main():
 
         server.command("replaceitem entity EndPilotTest slot.hotbar 0 gold_block 8")
         time.sleep(0.4)
-        for x, cancelled, expected in ((2, 1, "air"), (3, 0, "gold_block")):
+        for index, (target, cancelled, expected) in enumerate(zip(
+            target_positions, (1, 0), ("air", "gold_block")
+        )):
+            x, y, z = target
+            if args.side_face:
+                # Keep each clicked support within normal player reach without intersecting it.
+                server.command(f"tp EndPilotTest {x - 0.5} 100 1.5")
+                time.sleep(0.8)
             offset = len(server.snapshot())
             input_line("place")
             line = until("placement_submitted=")
             submitted = json.loads(line.partition("placement_submitted=")[2])
-            assert submitted["x"] == x and submitted["tick"] > 0, submitted
-            server_has(f"placement_gate_event={x - 1} cancelled={cancelled}", offset)
-            offset = server.command(f"testforblock {x} 100 0 {expected}")
+            assert (
+                submitted["position"] == list(target)
+                and submitted["face"] == (4 if args.side_face else 1)
+                and submitted["tick"] > 0
+            ), submitted
+            server_has(f"placement_gate_event={index + 1} cancelled={cancelled}", offset)
+            offset = server.command(f"testforblock {x} {y} {z} {expected}")
             server_has("successfully found", offset)
             client_line = until("placement_update=")
             update = json.loads(client_line.partition("placement_update=")[2])
-            assert update["x"] == x and update["layer"] == 0, update
+            assert update["position"] == list(target) and update["layer"] == 0, update
             if cancelled:
                 assert update["runtime_id"] == targets[0] and update["effect"] == "unchanged", update
                 result["cancelled_update"] = update
@@ -189,6 +211,7 @@ def main():
                 "endstone_cancel_and_bds_air" if cancelled else "endstone_allow_bds_gold_and_client_update"
             )
 
+        result["face"] = 4 if args.side_face else 1
         until("placement_checks_ready")
         if args.kick:
             server.command("kick EndPilotTest EndPilotKickProbe")
