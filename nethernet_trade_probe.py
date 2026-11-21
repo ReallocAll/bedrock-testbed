@@ -28,6 +28,8 @@ def main():
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--interrupt", action="store_true", help="cancel a staged trade through the public SDK")
     parser.add_argument("--two-input", action="store_true", help="verify a quoted two-input trade")
+    parser.add_argument("--server-interrupt", action="store_true",
+                        help="kick the player after the server accepts trade staging")
     args = parser.parse_args()
 
     work = ROOT / "work"
@@ -67,7 +69,8 @@ def main():
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url]
             + (["--interrupt"] if args.interrupt else [])
-            + (["--two-input"] if args.two_input else []),
+            + (["--two-input"] if args.two_input else [])
+            + (["--server-interrupt"] if args.server_interrupt else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -252,7 +255,19 @@ def main():
             ), staged
             result["checks"].append("server_accepted_trade_ingredient_and_reconciled_slots")
     
-            if args.interrupt:
+            if args.server_interrupt:
+                until("trade_server_interrupt_ready")
+                server.command("kick EndPilotTest Server interrupted the staged trade")
+                interrupted = json.loads(until("trade_server_interrupted=", timeout=20))
+                assert interrupted == {
+                    "packet": "DisconnectPacket", "window_id": offers["window_id"],
+                    "staging_request_id": staged["request_id"],
+                    "staging_result": "SUCCESS", "exchange_submitted": False,
+                }, interrupted
+                server.wait_player(False)
+                result["interruption"] = interrupted
+                result["checks"].append("bds_initiated_disconnect_after_confirmed_stage")
+            elif args.interrupt:
                 until("trade_abort_ready")
                 send("abort")
                 unstaged = json.loads(until("trade_unstage_result=", timeout=30))
@@ -339,7 +354,8 @@ def main():
                 result["checks"].append("trade_close_ack_matches_window")
     
 
-        send("close")
+        if not args.server_interrupt:
+            send("close")
         until("disconnected EndPilotTest")
         assert client.wait(timeout=10) == 0, client.returncode
         server.wait_player(False)
