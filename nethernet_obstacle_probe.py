@@ -18,7 +18,8 @@ from server import ROOT, Server, configure
 
 
 async def exercise(server: Server, transport: str, results: dict,
-                   kick_active: bool = False, close_active: bool = False):
+                   kick_active: bool = False, close_active: bool = False,
+                   cancel_active: bool = False):
     bot = Bot("EndPilotTest")
     url = ("http://127.0.0.1:19132" if transport == "nethernet"
            else "raknet://127.0.0.1:19132")
@@ -62,7 +63,7 @@ async def exercise(server: Server, transport: str, results: dict,
         results["observed_blocks"] = dict(zip((str(p) for p in sampled), states))
         results["checks"].append("client_observed_air_solid_and_unknown")
 
-        if kick_active or close_active:
+        if kick_active or close_active or cancel_active:
             # A longer goal keeps navigation active while BDS observes a detour.
             movement = bot._movement
             ticker = movement._ticker
@@ -86,6 +87,41 @@ async def exercise(server: Server, transport: str, results: dict,
                     raise AssertionError(f"Close did not interrupt active navigation: {frames}")
                 results["close"] = {"submitted_frames": frames}
                 results["checks"].append("bot_close_interrupts_active_navigation")
+            elif cancel_active:
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, 5)
+                except asyncio.CancelledError:
+                    pass
+                else:
+                    raise AssertionError("Task.cancel did not propagate from public navigate_to")
+                if movement._active_done is not None:
+                    raise AssertionError("Cancelled navigation retained an active action")
+                before = await asyncio.to_thread(server_target, server)
+                await asyncio.sleep(0.35)
+                stopped = await asyncio.to_thread(server_target, server)
+                drift = ((stopped["position"]["x"] - before["position"]["x"]) ** 2
+                         + (stopped["position"]["z"] - before["position"]["z"]) ** 2) ** 0.5
+                if drift > 0.15:
+                    raise AssertionError(f"BDS still moving after cancellation: {before} -> {stopped}")
+                if ticker.done():
+                    raise AssertionError("Cancel unexpectedly stopped the idle ticker")
+                x, y, z = bot.position
+                await bot.look_at((x, y, z - 6))
+                resumed = await bot.walk_forward(8)
+                await asyncio.sleep(0.2)
+                after = await asyncio.to_thread(server_target, server)
+                if resumed != 8 or after["position"]["z"] >= stopped["position"]["z"] - 0.2:
+                    raise AssertionError(f"BDS did not accept follow-up walk: {resumed}, {stopped} -> {after}")
+                results["cancel"] = {
+                    "action": "navigate_to", "outcome": "CancelledError",
+                    "stop_drift": drift, "followup_frames": resumed,
+                    "followup_server_position": after,
+                }
+                results["checks"].extend((
+                    "task_cancel_releases_navigation_without_closing_bot",
+                    "bds_querytarget_confirms_stop_and_followup_walk",
+                ))
             else:
                 server.command("kick EndPilotTest EndPilotKickNavigation")
                 packet = await disconnected
@@ -107,9 +143,14 @@ async def exercise(server: Server, transport: str, results: dict,
             if movement._active_done is not None:
                 raise AssertionError("Navigation left an active action behind")
             await asyncio.sleep(0)
-            if not ticker.done():
-                raise AssertionError("Movement ticker survived shutdown")
-            results["checks"].append("navigation_ticker_drained")
+            if cancel_active:
+                if ticker.done():
+                    raise AssertionError("Idle ticker stopped after cancellation")
+                results["checks"].append("navigation_ticker_survives_cancel")
+            else:
+                if not ticker.done():
+                    raise AssertionError("Movement ticker survived shutdown")
+                results["checks"].append("navigation_ticker_drained")
         else:
             task = asyncio.create_task(bot.navigate_to((3, 100, 0), ticks=120))
             await asyncio.sleep(0.65)
@@ -141,9 +182,10 @@ def main():
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--kick-active", action="store_true")
     parser.add_argument("--close-active", action="store_true")
+    parser.add_argument("--cancel-active", action="store_true")
     args = parser.parse_args()
-    if args.kick_active and args.close_active:
-        parser.error("--kick-active and --close-active are mutually exclusive")
+    if sum((args.kick_active, args.close_active, args.cancel_active)) > 1:
+        parser.error("--kick-active, --close-active and --cancel-active are mutually exclusive")
     work = ROOT / "work"
     if work.exists():
         shutil.rmtree(work)
@@ -176,7 +218,8 @@ def main():
         server.wait_ready()
         results["checks"].append("fresh_bds_ready")
         asyncio.run(exercise(server, args.transport, results,
-                             kick_active=args.kick_active, close_active=args.close_active))
+                             kick_active=args.kick_active, close_active=args.close_active,
+                             cancel_active=args.cancel_active))
         server.stop()
         server = None
         results["checks"].append("bds_clean_shutdown")
