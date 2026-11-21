@@ -138,6 +138,7 @@ def main():
             outcome["checks"].append("active_follow_interrupted_by_bot_close")
         elif args.kick_active:
             until("follow_kick_watcher_ready")
+            send("kick")
             server.command("kick EndPilotTest EndPilotKickFollow")
             payload = json.loads(until("follow_kicked=", timeout=15).partition("follow_kicked=")[2])
             outcome["kick"] = payload
