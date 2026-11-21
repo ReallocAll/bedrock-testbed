@@ -121,7 +121,7 @@ def main():
         start = server.command(
             f"give EndPilotTest {chosen['ingredient']} {chosen['ingredient_count']}"
         )
-        server_has("given", start)
+        server_has("gave", start)
         send("craft")
         crafted = json.loads(until("craft_result="))
         result["craft"] = crafted
@@ -135,11 +135,10 @@ def main():
 
         # Independent authority: only a BDS player with the crafted output
         # can place the oracle block through the server's execute command.
-        start = server.command(
+        server.command(
             f"execute as @a[hasitem={{item={chosen['output']},"
             f"quantity={chosen['output_count']}..}}] run setblock 2 100 0 gold_block"
         )
-        server_has("changed", start)
         start = server.command("testforblock 2 100 0 gold_block")
         server_has("successfully found", start)
         result["checks"].append("bds_independently_confirmed_crafted_output")
