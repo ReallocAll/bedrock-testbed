@@ -276,7 +276,8 @@ def main() -> int:
                 process.stdin.flush()
                 spawn = json.loads(until("player_spawn_observed="))
                 assert spawn["name"] == "EndPilotTest" and spawn["runtime_id"] > 0, spawn
-                assert spawn["unique_id"] > 0, spawn
+                # Bedrock unique actor IDs are signed; BDS commonly assigns negatives.
+                assert spawn["unique_id"] != 0, spawn
                 results["player_spawn"] = spawn
                 results["checks"].append("sdk_observed_other_player_spawn_and_unique_id")
                 until("player_ready")
