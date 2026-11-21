@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     direction = parser.add_mutually_exclusive_group()
     direction.add_argument("--forward", action="store_true", help="Exercise a forward-moving jump")
+    direction.add_argument("--sprint-forward", action="store_true", help="Compare forward and sprint jumps")
     direction.add_argument("--backward", action="store_true", help="Exercise a backward-moving jump")
     direction.add_argument("--left", action="store_true", help="Exercise a left-strafing jump")
     direction.add_argument("--right", action="store_true", help="Exercise a right-strafing jump")
@@ -36,7 +37,7 @@ def main():
     direction.add_argument("--backward-left", action="store_true", help="Exercise a backward-left jump")
     direction.add_argument("--backward-right", action="store_true", help="Exercise a backward-right jump")
     args = parser.parse_args()
-    moving_jump = (args.forward or args.backward or args.left or args.right
+    moving_jump = (args.forward or args.sprint_forward or args.backward or args.left or args.right
                    or args.forward_left or args.forward_right
                    or args.backward_left or args.backward_right)
     direction = ("backward_left" if args.backward_left else "backward_right" if args.backward_right
@@ -120,8 +121,9 @@ def main():
         # Prepare a loaded, level platform before observing vertical motion.
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
-        filled(server, "fill -3 100 -3 3 104 3 air")
-        filled(server, "fill -3 99 -3 3 99 3 stone")
+        front = 10 if args.sprint_forward else 3
+        filled(server, f"fill -3 100 -3 3 104 {front} air")
+        filled(server, f"fill -3 99 -3 3 99 {front} stone")
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
 
@@ -184,6 +186,43 @@ def main():
                 assert abs(landed["x"] - stable["x"]) < 0.35, result["jump"]
                 result["jump"]["displacement_z"] = displacement_z
             result["checks"].append(f"independent_bds_{direction}_jump_displacement")
+
+        if args.sprint_forward:
+            # Compare on the same floor and transport using BDS coordinates.
+            normal_distance = landed["z"] - stable["z"]
+            assert normal_distance > 0.5, result["jump"]
+            server.command("tp EndPilotTest 0.5 100 0.5")
+            time.sleep(0.7)
+            sprint_start = server_position(server)
+            assert abs(sprint_start["z"] - stable["z"]) < 0.2, (stable, sprint_start)
+            send("sprint_jump")
+            key_tick = int(until("sprint_key_tick="))
+            until("sprint_jump_started")
+            sprint_samples = []
+            deadline = time.monotonic() + 1.1
+            while time.monotonic() < deadline:
+                sprint_samples.append(server_position(server))
+                time.sleep(0.04)
+            sprint_ticks = int(until("sprint_jump_ticks="))
+            release_tick = int(until("sprint_release_tick="))
+            until("sprint_jump_finished")
+            sprint_landed = server_position(server)
+            sprint_rise = max((v["y"] for v in sprint_samples), default=sprint_start["y"]) - sprint_start["y"]
+            sprint_distance = sprint_landed["z"] - sprint_start["z"]
+            result["sprint_jump"] = {
+                "ground": sprint_start, "sampled_positions": sprint_samples,
+                "rise": sprint_rise, "landed": sprint_landed,
+                "normal_jump_distance": normal_distance,
+                "sprint_jump_distance": sprint_distance,
+                "key_tick": key_tick, "ticks": sprint_ticks, "release_tick": release_tick,
+            }
+            assert key_tick > 0 and sprint_ticks == 18 and release_tick > key_tick
+            result["checks"].append("sdk_sprint_jump_input_and_release")
+            assert sprint_rise > 0.25 and abs(sprint_landed["y"] - sprint_start["y"]) < 0.2, result["sprint_jump"]
+            result["checks"].append("independent_bds_sprint_jump_rise_and_landing")
+            assert abs(sprint_landed["x"] - sprint_start["x"]) < 0.35, result["sprint_jump"]
+            assert sprint_distance > normal_distance + 0.2, result["sprint_jump"]
+            result["checks"].append("independent_bds_sprint_jump_exceeds_normal_jump")
 
         send("close")
         until("disconnected EndPilotTest")
