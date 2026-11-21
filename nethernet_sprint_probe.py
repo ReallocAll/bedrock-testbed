@@ -189,6 +189,30 @@ def main():
             }
         result["checks"].append("independent_bds_normalized_diagonal_movement")
 
+        backward_diagonal = {}
+        for side in ("left", "right"):
+            server.command("tp EndPilotTest 0.5 100 0.5")
+            time.sleep(0.7)
+            start = server_position(server)
+            send("backward-diagonal-" + side)
+            ticks = int(until(f"backward_diagonal_{side}_ticks="))
+            assert ticks == 18, (side, ticks)
+            time.sleep(0.3)
+            end = server_position(server)
+            dx, dy, dz = (end[axis] - start[axis] for axis in ("x", "y", "z"))
+            assert abs(dy) < 0.2 and dz < -0.5, (side, start, end)
+            assert (dx > 0.5 if side == "left" else dx < -0.5), (
+                side, start, end)
+            # Preserve full-strength DOWN/LEFT or DOWN/RIGHT raw keys;
+            # compare the normalized travel against the straight baseline.
+            assert abs(dx) < walk_distance * 0.95, (side, dx, walk_distance)
+            assert abs(dz) < walk_distance * 0.95, (side, dz, walk_distance)
+            backward_diagonal[side] = {
+                "ticks": ticks, "start": start, "end": end,
+                "delta": {"x": dx, "y": dy, "z": dz},
+            }
+        result["checks"].append("independent_bds_backward_diagonal_movement")
+
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
         sprint_start = server_position(server)
@@ -205,7 +229,7 @@ def main():
         sprint_distance = sprinted["z"] - sprint_start["z"]
         result["movement"] = {
             "walk_ticks": walk_ticks, "backward_ticks": backward_ticks,
-            "diagonal": diagonal,
+            "diagonal": diagonal, "backward_diagonal": backward_diagonal,
             "left_ticks": left_ticks, "right_ticks": right_ticks,
             "left_start": left_start, "left_end": left_end,
             "right_start": right_start, "right_end": right_end,
