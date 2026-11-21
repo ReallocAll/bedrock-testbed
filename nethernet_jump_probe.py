@@ -34,6 +34,8 @@ def main():
     direction.add_argument("--hops-right", action="store_true", help="Exercise repeated right-strafing jumps")
     direction.add_argument("--hops-forward-left", action="store_true", help="Exercise repeated forward-left jumps")
     direction.add_argument("--hops-forward-right", action="store_true", help="Exercise repeated forward-right jumps")
+    direction.add_argument("--hops-backward-left", action="store_true", help="Exercise repeated backward-left jumps")
+    direction.add_argument("--hops-backward-right", action="store_true", help="Exercise repeated backward-right jumps")
     direction.add_argument("--sprint-forward", action="store_true", help="Compare forward and sprint jumps")
     direction.add_argument("--backward", action="store_true", help="Exercise a backward-moving jump")
     direction.add_argument("--left", action="store_true", help="Exercise a left-strafing jump")
@@ -43,13 +45,15 @@ def main():
     direction.add_argument("--backward-left", action="store_true", help="Exercise a backward-left jump")
     direction.add_argument("--backward-right", action="store_true", help="Exercise a backward-right jump")
     args = parser.parse_args()
-    diagonal_hops = args.hops_forward_left or args.hops_forward_right
+    diagonal_hops = (args.hops_forward_left or args.hops_forward_right
+                     or args.hops_backward_left or args.hops_backward_right)
     repeated_hops = (args.hops_forward or args.hops_backward or args.hops_left
                      or args.hops_right or diagonal_hops)
     moving_jump = (args.forward or repeated_hops or args.sprint_forward or args.backward or args.left or args.right
                    or args.forward_left or args.forward_right
                    or args.backward_left or args.backward_right)
     direction = ("forward_left" if args.hops_forward_left else "forward_right" if args.hops_forward_right else
+                 "backward_left" if args.hops_backward_left else "backward_right" if args.hops_backward_right else
                  "backward_left" if args.backward_left else "backward_right" if args.backward_right
                  else "forward_left" if args.forward_left else "forward_right" if args.forward_right
                  else "backward" if args.backward or args.hops_backward else "left" if args.left or args.hops_left
@@ -92,7 +96,7 @@ def main():
                 or args.forward_left or args.forward_right
                 or args.backward_left or args.backward_right):
             client_command.append(
-                "left" if args.left or args.hops_left or args.forward_left or args.hops_forward_left or args.backward_left else "right"
+                "left" if args.left or args.hops_left or args.forward_left or args.hops_forward_left or args.backward_left or args.hops_backward_left else "right"
             )
         client = subprocess.Popen(
             client_command,
@@ -132,8 +136,8 @@ def main():
         # Prepare a loaded, level platform before observing vertical motion.
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
-        front = 10 if (args.sprint_forward or args.hops_forward or diagonal_hops) else 3
-        rear = -10 if args.hops_backward else -3
+        front = 10 if (args.sprint_forward or args.hops_forward or args.hops_forward_left or args.hops_forward_right) else 3
+        rear = -10 if args.hops_backward or args.hops_backward_left or args.hops_backward_right else -3
         side = 10 if args.hops_left or args.hops_right or diagonal_hops else 3
         filled(server, f"fill -{side} 100 {rear} {side} 104 {front} air")
         filled(server, f"fill -{side} 99 {rear} {side} 99 {front} stone")
@@ -195,18 +199,19 @@ def main():
             result["checks"].append(
                 "independent_bds_multiple_backward_jump_arcs" if args.hops_backward
                 else "independent_bds_multiple_lateral_jump_arcs" if args.hops_left or args.hops_right
+                else "independent_bds_multiple_backward_diagonal_jump_arcs" if args.hops_backward_left or args.hops_backward_right
                 else "independent_bds_multiple_forward_diagonal_jump_arcs" if diagonal_hops
                 else "independent_bds_multiple_forward_jump_arcs"
             )
         if moving_jump:
-            if args.backward_left or args.backward_right:
+            if args.backward_left or args.backward_right or args.hops_backward_left or args.hops_backward_right:
                 displacement_x = landed["x"] - stable["x"]
                 displacement_z = landed["z"] - stable["z"]
-                assert (displacement_x > 0.5 if args.backward_left else displacement_x < -0.5), result["jump"]
+                assert (displacement_x > 0.5 if args.backward_left or args.hops_backward_left else displacement_x < -0.5), result["jump"]
                 assert displacement_z < -0.5, result["jump"]
                 result["jump"]["displacement_x"] = displacement_x
                 result["jump"]["displacement_z"] = displacement_z
-            elif args.forward_left or args.forward_right or diagonal_hops:
+            elif args.forward_left or args.forward_right or args.hops_forward_left or args.hops_forward_right:
                 displacement_x = landed["x"] - stable["x"]
                 displacement_z = landed["z"] - stable["z"]
                 assert (displacement_x > 0.5 if args.forward_left or args.hops_forward_left else displacement_x < -0.5), result["jump"]
