@@ -106,7 +106,7 @@ on:
         type: boolean
         default: false
       health_probe:
-        description: 'Use true for health, mcp-walk, mcp-handoff, respawn, hunger, container, container-split, container-split-late-grant, trade, trade-interrupt, trade-two-input, trade-server-interrupt, trade-reconnect, trade-original, form, craft, craft-store, craft-grid, craft-workbench, craft-workbench-batch, craft-tool, furnace, furnace-store sneak or drop; container-swap-late-grant verifies an ordered slot update'
+        description: 'Use true for health, mcp-walk, mcp-handoff, respawn, hunger, container, container-split, container-split-late-grant, trade, trade-interrupt, trade-two-input, trade-server-interrupt, trade-reconnect, trade-original, form, craft, craft-store, craft-grid, craft-workbench, craft-workbench-batch, craft-tool, furnace, furnace-store, sneak or drop; container-swap-late-grant verifies an ordered slot update'
         required: false
         type: string
         default: ''
