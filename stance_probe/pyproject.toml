@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "endstone-stance-probe"
+version = "0.0.1"
+requires-python = ">=3.12"
+
+[project.entry-points."endstone"]
+stance_probe = "stance_probe:StanceProbe"
+
+[tool.setuptools]
+packages = ["stance_probe"]
