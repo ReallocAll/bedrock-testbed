@@ -212,6 +212,28 @@ def main():
             wait_server("successfully found", start)
             result["bds_ingredient_returned"] = observed_return
             result["checks"].append("independent_bds_inventory_matches_sdk_observation")
+
+            send("retry")
+            retried = json.loads(until("trade_retry_result=", timeout=35))
+            assert retried["uses_after_reopen"] == retried["uses_before"] == selected["uses"], retried
+            assert retried["stage_result"] == retried["result"] == "SUCCESS", retried
+            assert retried["stage_request_id"] < unstaged["request_id"], retried
+            assert retried["request_id"] < retried["stage_request_id"], retried
+            assert retried["output_slot"] == 9 and retried["output_id"] != 0, retried
+            assert retried["output_count"] == selected["sell"]["count"], retried
+            assert retried["ingredient_after"] == staged["before"] - count, retried
+            assert retried["closed_window"] == retried["reopened_window"], retried
+            result["retry"] = retried
+            result["checks"].append("fresh_quote_retry_accepted_after_cancel")
+
+            sell = selected["sell"]
+            server.command(
+                f"execute as @a[hasitem={{item={sell['name']},quantity={sell['count']}..}}] "
+                "run setblock 5 100 0 gold_block"
+            )
+            start = server.command("testforblock 5 100 0 gold_block")
+            wait_server("successfully found", start)
+            result["checks"].append("independent_bds_retried_trade_output_oracle")
         else:
             exchanged = json.loads(until("trade_exchange_result=", timeout=30))
             result["exchange"] = exchanged
