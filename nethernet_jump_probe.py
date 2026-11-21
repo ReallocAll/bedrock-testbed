@@ -33,10 +33,14 @@ def main():
     direction.add_argument("--right", action="store_true", help="Exercise a right-strafing jump")
     direction.add_argument("--forward-left", action="store_true", help="Exercise a forward-left jump")
     direction.add_argument("--forward-right", action="store_true", help="Exercise a forward-right jump")
+    direction.add_argument("--backward-left", action="store_true", help="Exercise a backward-left jump")
+    direction.add_argument("--backward-right", action="store_true", help="Exercise a backward-right jump")
     args = parser.parse_args()
     moving_jump = (args.forward or args.backward or args.left or args.right
-                   or args.forward_left or args.forward_right)
-    direction = ("forward_left" if args.forward_left else "forward_right" if args.forward_right
+                   or args.forward_left or args.forward_right
+                   or args.backward_left or args.backward_right)
+    direction = ("backward_left" if args.backward_left else "backward_right" if args.backward_right
+                 else "forward_left" if args.forward_left else "forward_right" if args.forward_right
                  else "backward" if args.backward else "left" if args.left
                  else "right" if args.right else "forward")
 
@@ -73,8 +77,11 @@ def main():
         url = ("http://127.0.0.1:19132" if args.transport == "nethernet"
                else "raknet://127.0.0.1:19132")
         client_command = [sys.executable, str(args.probe.absolute()), url]
-        if args.left or args.right or args.forward_left or args.forward_right:
-            client_command.append("left" if args.left or args.forward_left else "right")
+        if (args.left or args.right or args.forward_left or args.forward_right
+                or args.backward_left or args.backward_right):
+            client_command.append(
+                "left" if args.left or args.forward_left or args.backward_left else "right"
+            )
         client = subprocess.Popen(
             client_command,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -152,7 +159,14 @@ def main():
         assert abs(landed["y"] - stable["y"]) < 0.2, result["jump"]
         result["checks"].append("independent_bds_querytarget_landing")
         if moving_jump:
-            if args.forward_left or args.forward_right:
+            if args.backward_left or args.backward_right:
+                displacement_x = landed["x"] - stable["x"]
+                displacement_z = landed["z"] - stable["z"]
+                assert (displacement_x > 0.5 if args.backward_left else displacement_x < -0.5), result["jump"]
+                assert displacement_z < -0.5, result["jump"]
+                result["jump"]["displacement_x"] = displacement_x
+                result["jump"]["displacement_z"] = displacement_z
+            elif args.forward_left or args.forward_right:
                 displacement_x = landed["x"] - stable["x"]
                 displacement_z = landed["z"] - stable["z"]
                 assert (displacement_x > 0.5 if args.forward_left else displacement_x < -0.5), result["jump"]
