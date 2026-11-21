@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "endstone-form-probe"
+version = "0.0.1"
+requires-python = ">=3.12"
+
+[project.entry-points."endstone"]
+form_probe = "form_probe:FormProbe"
+
+[tool.setuptools]
+packages = ["form_probe"]
