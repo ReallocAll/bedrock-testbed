@@ -445,14 +445,14 @@ jobs:
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --probe endpilot-src/examples/open_container.py \
             --transport "${{ matrix.transport }}" --drop
-      - name: Verify offhand equip against independent server slot
+      - name: Observe BDS-granted offhand item via public SDK
         if: inputs.health_probe == 'offhand'
         shell: bash
         run: |
           .venv-client/bin/python nethernet_container_probe.py \
             --server-python .venv-server/bin/python \
             --endpilot-commit "$ENDPILOT_COMMIT" \
-            --probe endpilot-src/examples/equip_offhand.py \
+            --probe endpilot-src/examples/observe_offhand.py \
             --transport "${{ matrix.transport }}" --offhand
       - name: Verify one server-accepted inventory auto-craft and BDS output
         if: (inputs.health_probe == 'craft' || inputs.health_probe == 'craft-store' || inputs.health_probe == 'craft-grid')
