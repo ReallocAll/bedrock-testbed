@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--transport", choices=("nethernet", "raknet"), required=True)
     parser.add_argument("--stop", action="store_true")
+    parser.add_argument("--close-active", action="store_true")
     parser.add_argument("--switch", action="store_true")
     args = parser.parse_args()
     work = ROOT / "work"
@@ -66,7 +67,8 @@ def main():
                else "raknet://127.0.0.1:19132")
         client = subprocess.Popen(
             [sys.executable, str(args.probe.absolute()), url] +
-            (["--switch"] if args.switch else ["--stop"] if args.stop else []),
+            (["--switch"] if args.switch else ["--stop"] if args.stop else
+             ["--close-active"] if args.close_active else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1,
         )
@@ -126,7 +128,14 @@ def main():
             raise AssertionError(f"Server did not observe westward tracking: {west}")
         outcome["checks"].append("server_observed_initial_westward_follow")
 
-        if args.switch:
+        if args.close_active:
+            send("close")
+            payload = json.loads(until("follow_closed=", timeout=12))
+            outcome["input"] = payload
+            if not (5 <= payload["frames"] < 160):
+                raise AssertionError(f"Closing did not interrupt active follow: {payload}")
+            outcome["checks"].append("active_follow_interrupted_by_bot_close")
+        elif args.switch:
             until("follow_switch_watcher_ready")
             server.command("summon cow 6 100 0")
             switched = json.loads(until("follow_switched=", timeout=12))
@@ -193,7 +202,8 @@ def main():
                 raise AssertionError(f"Too few moving input frames: {payload}")
             outcome["checks"].append("bds_target_teleport_then_server_observed_eastward_chase")
 
-        send("close")
+        if not args.close_active:
+            send("close")
         until("disconnected EndPilotTest")
         if client.wait(timeout=10) != 0:
             raise AssertionError(f"Client exited with {client.returncode}")
