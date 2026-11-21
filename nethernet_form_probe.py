@@ -122,7 +122,7 @@ def main():
         server_has("form_probe_sent=EndPilotTest")
         answer = json.loads(until("action_form_answer_sent="))
         assert isinstance(answer["form_id"], int) and answer["form_id"] >= 0, answer
-        assert answer["title"] == "EndPilot probe", answer
+        assert answer["title"] == {"rawtext": [{"text": "EndPilot probe"}]}, answer
         assert answer["button_index"] == 1, answer
         result["response"] = answer
         result["checks"].append("server_form_id_observed_and_typed_reply_sent")
