@@ -29,6 +29,7 @@ def main():
     direction = parser.add_mutually_exclusive_group()
     direction.add_argument("--forward", action="store_true", help="Exercise a forward-moving jump")
     direction.add_argument("--hops-forward", action="store_true", help="Exercise repeated forward jumps")
+    direction.add_argument("--hops-backward", action="store_true", help="Exercise repeated backward jumps")
     direction.add_argument("--sprint-forward", action="store_true", help="Compare forward and sprint jumps")
     direction.add_argument("--backward", action="store_true", help="Exercise a backward-moving jump")
     direction.add_argument("--left", action="store_true", help="Exercise a left-strafing jump")
@@ -38,12 +39,12 @@ def main():
     direction.add_argument("--backward-left", action="store_true", help="Exercise a backward-left jump")
     direction.add_argument("--backward-right", action="store_true", help="Exercise a backward-right jump")
     args = parser.parse_args()
-    moving_jump = (args.forward or args.hops_forward or args.sprint_forward or args.backward or args.left or args.right
+    moving_jump = (args.forward or args.hops_forward or args.hops_backward or args.sprint_forward or args.backward or args.left or args.right
                    or args.forward_left or args.forward_right
                    or args.backward_left or args.backward_right)
     direction = ("backward_left" if args.backward_left else "backward_right" if args.backward_right
                  else "forward_left" if args.forward_left else "forward_right" if args.forward_right
-                 else "backward" if args.backward else "left" if args.left
+                 else "backward" if args.backward or args.hops_backward else "left" if args.left
                  else "right" if args.right else "forward")
 
     work = ROOT / "work"
@@ -123,8 +124,9 @@ def main():
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
         front = 10 if (args.sprint_forward or args.hops_forward) else 3
-        filled(server, f"fill -3 100 -3 3 104 {front} air")
-        filled(server, f"fill -3 99 -3 3 99 {front} stone")
+        rear = -10 if args.hops_backward else -3
+        filled(server, f"fill -3 100 {rear} 3 104 {front} air")
+        filled(server, f"fill -3 99 {rear} 3 99 {front} stone")
         server.command("tp EndPilotTest 0.5 100 0.5")
         time.sleep(0.7)
 
@@ -136,19 +138,21 @@ def main():
 
         send("jump")
         if moving_jump:
-            until("hop_forward_started" if args.hops_forward else f"jump_{direction}_started")
+            until("hop_backward_started" if args.hops_backward else
+                  "hop_forward_started" if args.hops_forward else f"jump_{direction}_started")
         else:
             tick = int(until("jump_tick="))
             assert tick > 0
             result["jump_tick"] = tick
         samples = []
-        deadline = time.monotonic() + (2.3 if args.hops_forward else 1.1)
+        deadline = time.monotonic() + (2.3 if args.hops_forward or args.hops_backward else 1.1)
         while time.monotonic() < deadline:
             samples.append(server_position(server))
             time.sleep(0.04)
         if moving_jump:
-            ticks = int(until("hop_forward_ticks=" if args.hops_forward else f"jump_{direction}_ticks="))
-            assert ticks == (32 if args.hops_forward else 18), ticks
+            ticks = int(until("hop_backward_ticks=" if args.hops_backward else
+                              "hop_forward_ticks=" if args.hops_forward else f"jump_{direction}_ticks="))
+            assert ticks == (32 if args.hops_forward or args.hops_backward else 18), ticks
             result[f"jump_{direction}_ticks"] = ticks
         until("jump_finished")
         rise = max((p["y"] for p in samples), default=stable["y"]) - stable["y"]
@@ -161,7 +165,7 @@ def main():
         result["checks"].append("independent_bds_querytarget_jump_rise")
         assert abs(landed["y"] - stable["y"]) < 0.2, result["jump"]
         result["checks"].append("independent_bds_querytarget_landing")
-        if args.hops_forward:
+        if args.hops_forward or args.hops_backward:
             # BDS coordinates, not submitted input, must show two separate arcs.
             peaks = 0
             high = False
@@ -174,7 +178,10 @@ def main():
                     high = False
             result["jump"]["independent_rises"] = peaks
             assert peaks >= 2, result["jump"]
-            result["checks"].append("independent_bds_multiple_forward_jump_arcs")
+            result["checks"].append(
+                "independent_bds_multiple_backward_jump_arcs" if args.hops_backward
+                else "independent_bds_multiple_forward_jump_arcs"
+            )
         if moving_jump:
             if args.backward_left or args.backward_right:
                 displacement_x = landed["x"] - stable["x"]
@@ -197,7 +204,8 @@ def main():
                 result["jump"]["displacement_x"] = displacement_x
             else:
                 displacement_z = landed["z"] - stable["z"]
-                assert (displacement_z < -0.5 if args.backward else displacement_z > 0.5), result["jump"]
+                assert (displacement_z < -0.5 if args.backward or args.hops_backward
+                        else displacement_z > 0.5), result["jump"]
                 assert abs(landed["x"] - stable["x"]) < 0.35, result["jump"]
                 result["jump"]["displacement_z"] = displacement_z
             result["checks"].append(f"independent_bds_{direction}_jump_displacement")
