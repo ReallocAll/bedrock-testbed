@@ -217,7 +217,7 @@ def main():
                     start = server.command(f"testforblock {slot} 100 1 {block}")
                     server_has("successfully found", start)
                 result["checks"].append("bds_independently_confirmed_both_inventory_slots")
-            if args.chat_during_take:
+            if args.chat_during_take and not args.server_grant_during_take:
                 server.command(
                     "execute as @a[hasitem={item=dirt,quantity=2}] "
                     "run setblock 2 100 0 gold_block"
