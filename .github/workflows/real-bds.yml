@@ -106,7 +106,7 @@ on:
         type: boolean
         default: false
       health_probe:
-        description: 'Use true for health, respawn, hunger, container, container-split, trade, craft, craft-store, craft-grid or drop'
+        description: 'Use true for health, respawn, hunger, container, container-split, trade, craft, craft-store, craft-grid, furnace or drop'
         required: false
         type: string
         default: ''
@@ -140,7 +140,7 @@ concurrency:
 
 jobs:
   endpilot:
-    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe && !inputs.position_probe && !inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.refusal_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && inputs.health_probe != 'true' && inputs.health_probe != 'respawn' && inputs.health_probe != 'hunger' && !inputs.hotbar_probe && !inputs.mining_probe && !inputs.pickup_probe && (inputs.health_probe != 'container' && inputs.health_probe != 'container-take' && inputs.health_probe != 'container-split' && inputs.health_probe != 'container-put' && inputs.health_probe != 'container-equip' && inputs.health_probe != 'trade' && inputs.health_probe != 'craft' && inputs.health_probe != 'craft-store' && inputs.health_probe != 'craft-grid' && inputs.health_probe != 'craft-workbench' && inputs.health_probe != 'drop' && inputs.health_probe != 'container-server-close')
+    if: github.actor == 'ReallocAll' && !inputs.settings_probe && !inputs.join_probe && !inputs.position_probe && !inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.refusal_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && inputs.health_probe != 'true' && inputs.health_probe != 'respawn' && inputs.health_probe != 'hunger' && !inputs.hotbar_probe && !inputs.mining_probe && !inputs.pickup_probe && (inputs.health_probe != 'container' && inputs.health_probe != 'container-take' && inputs.health_probe != 'container-split' && inputs.health_probe != 'container-put' && inputs.health_probe != 'container-equip' && inputs.health_probe != 'trade' && inputs.health_probe != 'craft' && inputs.health_probe != 'craft-store' && inputs.health_probe != 'craft-grid' && inputs.health_probe != 'craft-workbench' && inputs.health_probe != 'furnace' && inputs.health_probe != 'drop' && inputs.health_probe != 'container-server-close')
     name: EndPilot (${{ matrix.suite }}, ${{ matrix.transport }})
     runs-on: ubuntu-24.04
     strategy:
@@ -232,13 +232,13 @@ jobs:
           retention-days: 14
 
   network_settings:
-    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.position_probe || inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.identity_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || (inputs.health_probe == 'true' || inputs.health_probe == 'respawn' || inputs.health_probe == 'hunger') || inputs.hotbar_probe || inputs.mining_probe || inputs.pickup_probe || (inputs.health_probe == 'container' || (inputs.health_probe == 'container-take' || inputs.health_probe == 'container-split') || inputs.health_probe == 'container-put' || inputs.health_probe == 'container-equip' || inputs.health_probe == 'container-server-close' || inputs.health_probe == 'trade' || (inputs.health_probe == 'craft' || inputs.health_probe == 'craft-store' || inputs.health_probe == 'craft-grid' || inputs.health_probe == 'craft-workbench') || inputs.health_probe == 'drop'))
+    if: github.actor == 'ReallocAll' && (inputs.settings_probe || inputs.join_probe || inputs.position_probe || inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.identity_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || (inputs.health_probe == 'true' || inputs.health_probe == 'respawn' || inputs.health_probe == 'hunger') || inputs.hotbar_probe || inputs.mining_probe || inputs.pickup_probe || (inputs.health_probe == 'container' || (inputs.health_probe == 'container-take' || inputs.health_probe == 'container-split') || inputs.health_probe == 'container-put' || inputs.health_probe == 'container-equip' || inputs.health_probe == 'container-server-close' || inputs.health_probe == 'trade' || (inputs.health_probe == 'craft' || inputs.health_probe == 'craft-store' || inputs.health_probe == 'craft-grid' || inputs.health_probe == 'craft-workbench' || inputs.health_probe == 'furnace') || inputs.health_probe == 'drop'))
     name: EndPilot (settings / ${{ matrix.transport }} / ${{ matrix.entity_scene }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        transport: ${{ fromJSON((inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || (inputs.health_probe == 'true' || inputs.health_probe == 'respawn' || inputs.health_probe == 'hunger') || inputs.hotbar_probe || inputs.mining_probe || inputs.pickup_probe || (inputs.health_probe == 'container' || (inputs.health_probe == 'container-take' || inputs.health_probe == 'container-split') || inputs.health_probe == 'container-put' || inputs.health_probe == 'container-equip' || inputs.health_probe == 'container-server-close' || inputs.health_probe == 'trade' || (inputs.health_probe == 'craft' || inputs.health_probe == 'craft-store' || inputs.health_probe == 'craft-grid' || inputs.health_probe == 'craft-workbench') || inputs.health_probe == 'drop')) && '["nethernet","raknet"]' || '["nethernet"]') }}
+        transport: ${{ fromJSON((inputs.walk_probe || inputs.turn_probe || inputs.follow_probe || inputs.stop_probe || inputs.switch_probe || inputs.obstacle_probe || inputs.block_probe || inputs.subchunk_probe || inputs.place_probe || inputs.mcp_probe || inputs.kick_probe || inputs.refusal_probe || inputs.timeout_probe || inputs.chat_probe || inputs.command_probe || inputs.entity_probe || (inputs.health_probe == 'true' || inputs.health_probe == 'respawn' || inputs.health_probe == 'hunger') || inputs.hotbar_probe || inputs.mining_probe || inputs.pickup_probe || (inputs.health_probe == 'container' || (inputs.health_probe == 'container-take' || inputs.health_probe == 'container-split') || inputs.health_probe == 'container-put' || inputs.health_probe == 'container-equip' || inputs.health_probe == 'container-server-close' || inputs.health_probe == 'trade' || (inputs.health_probe == 'craft' || inputs.health_probe == 'craft-store' || inputs.health_probe == 'craft-grid' || inputs.health_probe == 'craft-workbench' || inputs.health_probe == 'furnace') || inputs.health_probe == 'drop')) && '["nethernet","raknet"]' || '["nethernet"]') }}
         entity_scene: ${{ fromJSON(inputs.entity_probe && '["observe","attack","interact"]' || '["observe"]') }}
     timeout-minutes: 30
     env:
@@ -449,6 +449,15 @@ jobs:
             --endpilot-commit "$ENDPILOT_COMMIT" \
             --probe endpilot-src/examples/craft_workbench.py \
             --transport "${{ matrix.transport }}" --workbench
+      - name: Verify real BDS furnace smelting and output inventory
+        if: inputs.health_probe == 'furnace'
+        shell: bash
+        run: |
+          .venv-client/bin/python nethernet_furnace_probe.py \
+            --server-python .venv-server/bin/python \
+            --endpilot-commit "$ENDPILOT_COMMIT" \
+            --probe endpilot-src/examples/smelt_furnace.py \
+            --transport "${{ matrix.transport }}"
       - name: Verify a server-issued villager trade window and item quotes
         if: inputs.health_probe == 'trade'
         shell: bash
@@ -486,7 +495,7 @@ jobs:
             --probe endpilot-src/examples/collect_drop.py \
             --transport "${{ matrix.transport }}" --pickup --place-collected
       - name: Verify settings or player join against fresh real BDS
-        if: "!inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && inputs.health_probe != 'true' && inputs.health_probe != 'respawn' && inputs.health_probe != 'hunger' && !inputs.hotbar_probe && !inputs.mining_probe && !inputs.pickup_probe && (inputs.health_probe != 'container' && inputs.health_probe != 'container-take' && inputs.health_probe != 'container-split' && inputs.health_probe != 'container-put' && inputs.health_probe != 'container-equip' && inputs.health_probe != 'trade' && inputs.health_probe != 'craft' && inputs.health_probe != 'craft-store' && inputs.health_probe != 'craft-grid' && inputs.health_probe != 'craft-workbench' && inputs.health_probe != 'drop' && inputs.health_probe != 'container-server-close')"
+        if: "!inputs.walk_probe && !inputs.turn_probe && !inputs.follow_probe && !inputs.stop_probe && !inputs.switch_probe && !inputs.obstacle_probe && !inputs.identity_probe && !inputs.block_probe && !inputs.subchunk_probe && !inputs.place_probe && !inputs.mcp_probe && !inputs.kick_probe && !inputs.timeout_probe && !inputs.chat_probe && !inputs.command_probe && !inputs.entity_probe && inputs.health_probe != 'true' && inputs.health_probe != 'respawn' && inputs.health_probe != 'hunger' && !inputs.hotbar_probe && !inputs.mining_probe && !inputs.pickup_probe && (inputs.health_probe != 'container' && inputs.health_probe != 'container-take' && inputs.health_probe != 'container-split' && inputs.health_probe != 'container-put' && inputs.health_probe != 'container-equip' && inputs.health_probe != 'trade' && inputs.health_probe != 'craft' && inputs.health_probe != 'craft-store' && inputs.health_probe != 'craft-grid' && inputs.health_probe != 'craft-workbench' && inputs.health_probe != 'furnace' && inputs.health_probe != 'drop' && inputs.health_probe != 'container-server-close')"
         shell: bash
         run: |
           .venv-client/bin/python nethernet_settings_probe.py \
